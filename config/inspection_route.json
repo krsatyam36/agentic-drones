@@ -1,0 +1,15 @@
+{
+  "mission_id": "inspection_001",
+  "target": "drone1",
+  "actions": [
+    {"type": "TAKEOFF", "altitude": 20, "speed": 5},
+    {"type": "GOTO", "waypoint": {"x": 30, "y": 0, "z": -20}, "speed": 8},
+    {"type": "LOITER", "loiter_seconds": 5},
+    {"type": "GOTO", "waypoint": {"x": 30, "y": 30, "z": -20}, "speed": 8},
+    {"type": "LOITER", "loiter_seconds": 5},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 30, "z": -20}, "speed": 8},
+    {"type": "LOITER", "loiter_seconds": 5},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 0, "z": -20}, "speed": 8},
+    {"type": "RETURN_TO_LAUNCH"}
+  ]
+}

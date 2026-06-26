@@ -1,0 +1,16 @@
+{
+  "mission_id": "perimeter_patrol_001",
+  "target": "drone1",
+  "actions": [
+    {"type": "TAKEOFF", "altitude": 15, "speed": 5},
+    {"type": "GOTO", "waypoint": {"x": 50, "y": 0, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 50, "y": 50, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 50, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 0, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 50, "y": 0, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 50, "y": 50, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 50, "z": -15}, "speed": 10},
+    {"type": "GOTO", "waypoint": {"x": 0, "y": 0, "z": -15}, "speed": 10},
+    {"type": "LAND"}
+  ]
+}

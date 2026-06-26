@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  omokai:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: agentic-drones:latest
+    container_name: omokai_drone
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - OLLAMA_HOST=127.0.0.1
+    volumes:
+      - ./src:/workspace/src
+      - ./config:/workspace/config
+      - ./scripts:/workspace/scripts
+      - ./docs:/workspace/docs
+      - ./models:/workspace/models
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    runtime: nvidia
+    ipc: host
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    command: /bin/bash
