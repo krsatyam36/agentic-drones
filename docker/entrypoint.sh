@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-source /opt/ros/humble/setup.bash
-
-source /workspace/install/setup.bash 2>/dev/null || true
+if [ -f /opt/ros/humble/setup.bash ]; then
+    source /opt/ros/humble/setup.bash
+fi
 
 exec "$@"

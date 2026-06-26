@@ -17,3 +17,7 @@ models/
 *.mov
 Dockerfile
 *.log
+
+context.txt
+run.txt
+opencode_build_phases.txt

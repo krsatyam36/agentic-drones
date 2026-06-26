@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -67,18 +68,28 @@ class DeterministicExecutor:
             logger.warning("MAVSDK not available — running in simulation mode")
             self.drone = None
             return
-        import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self._do_connect(loop))
 
     async def _do_connect(self, loop):
-        await self.drone.connect()
+        try:
+            await asyncio.wait_for(self.drone.connect(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Drone connection timed out — running in simulation mode")
+            self.drone = None
+            return
         logger.info("Connecting...")
-        async for state in self.drone.core.connection_state():
-            if state.is_connected:
-                logger.info("Drone connected")
-                break
+        try:
+            async for state in asyncio.wait_for(
+                self.drone.core.connection_state(), timeout=5.0
+            ):
+                if state.is_connected:
+                    logger.info("Drone connected")
+                    break
+        except asyncio.TimeoutError:
+            logger.warning("No connection state received — running in simulation mode")
+            self.drone = None
 
     def arm(self):
         self.state = ExecutorState.ARMING
