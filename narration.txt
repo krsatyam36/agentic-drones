@@ -1,0 +1,92 @@
+# Omokai Robotics Task — Narration Log
+# Purpose: Track every step taken chronologically for demo & interview defense.
+
+---
+
+## Step 0 — Project Initialization
+- Repository initialized with planning docs: task.txt, plan.txt, techstack.txt, workflow.txt, workflow_claude.txt, claudeopus4.8high_playbook.txt.
+- README.md placeholder created.
+- Aim: Direct Offer tier — core pipeline + all 3 senior challenges.
+
+---
+
+## Step 1 — Project Structure & Docker Environment
+- Created directory structure: docker/, src/, docs/, scripts/, config/, models/, output/
+- Authored `docker/Dockerfile`: Ubuntu 22.04 + ROS 2 Humble + PX4 v1.15.4 + Gazebo Harmonic + Python deps (mavsdk, pydantic, ultralytics, openai, etc.) + Ollama
+- Authored `docker/entrypoint.sh`: Sources ROS 2
+- Authored `docker-compose.yml`: X11 forwarding, GPU passthrough, volume mounts for src/config/scripts
+
+## Step 2 — Schema (The Guardrail) — `src/schema/mission.py`
+- Pydantic v2 models: Waypoint, Action (discriminated union over TAKEOFF/GOTO/LOITER/RTL/LAND), MissionPlan
+- Semantic validators: must start TAKEOFF, must end LAND/RTL, altitude cap [1-50m], speed cap [0.5-15 m/s], waypoint jump distance <=500m, geofence compliance
+- Max 50 actions per mission
+
+## Step 3 — Validator (3 Validation Layers) — `src/validator/validator.py`
+- Layer 1 (Structural): JSON parse, root object check, required fields, non-empty actions list
+- Layer 2 (Semantic/Safety): Pydantic model validation catching altitude/speed/geofence/sequence violations
+- Layer 3 (Re-prompt): Self-correction loop (up to 3 retries) feeding errors back to LLM
+- Tested: 7/7 validator tests pass (good mission accepted, bad altitude/malformed/no-takeoff/no-land/speed violations all correctly rejected)
+
+## Step 4 — Deterministic Executor — `src/executor/executor.py`
+- State machine: IDLE -> ARMING -> TAKEOFF -> EXECUTING -> LANDING -> DONE, with FAILSAFE branch
+- Runs entirely from a validated JSON file -- no LLM dependency (kill-the-LLM demo ready)
+- Every command logged with ISO timestamp -- audit trail
+- Accepts `--mission` argument for file-based operation
+- Tested: Determinism (same JSON -> identical audit logs), Kill-LLM (executor from file without LLM process) -- 2/2 tests pass
+
+## Step 5 — LLM Node — `src/llm/llm_node.py`
+- Supports dual backend: Ollama (local, default) and OpenAI
+- System prompt with exact schema, action vocabulary, rules, and few-shot example
+- Temperature 0.1 for deterministic output, JSON format enforced
+- Re-prompt support for self-correction loop
+- Backend selectable via LLM_BACKEND and LLM_MODEL env vars
+
+## Step 6 — CLI (Operator Interface) — `src/cli/cli.py`
+- Interactive prompt loop: `>>> Enter command:`
+- Runs full pipeline: prompt -> LLM -> Validator -> save validated JSON
+- Auto-saves to `output/mission.json` for executor consumption
+- Exit with Ctrl+D or 'exit'
+
+## Step 7 — Sample Missions
+- `config/perimeter_loop.json`: 50m square patrol loop (2 laps), 15m altitude
+- `config/inspection_route.json`: Inspection route with LOITER at each checkpoint
+- `config/bad_mission.json`: Intentionally unsafe (500m, 100m/s) for validator demonstrations
+
+## Step 8 — Senior Challenge 3: Vision AI — `src/vision/vision_node.py`
+- YOLOv8 object detection with configurable target class (person, car, etc.)
+- Mock detection fallback using color tracking (when ultralytics not installed)
+- On first detection: saves annotated frame to `output/detections/`, alerts operator
+- PID-based visual servoing: pixel error (bbox center - frame center) -> body velocity
+- Target-lost fallback: hover/search mode
+- Standalone CLI: `python -m src.vision.vision_node person`
+- Also works with video files or live camera
+
+## Step 9 — Senior Challenge 2: SLAM / Autonomous Navigation — `src/slam/slam_navigator.py`
+- SLAM Toolbox integration: ingests /scan + /odom -> builds /map
+- Nav2 path planning: obstacle-aware route computation
+- PathPlanner with straight-line interpolation and waypoint generation
+- NAVIGATE_TO action type for executor to send goal poses to Nav2 action server
+- Use-sim-time flag for simulated clock synchronization
+
+## Step 10 — Senior Challenge 1: Multi-Agent Formations — `src/swarm/coordinator.py`
+- SwarmCoordinator manages N drones with unique MAVLink ports
+- 4 formation types: LINE, WEDGE, DIAMOND, COLUMN
+- Leader-follower model: leader follows path, followers maintain computed body-frame offsets
+- Follower setpoints: leader pose + formation offset rotated by leader yaw
+- Mission dispatch: per-drone missions or swarm-level commands
+- Tested: 3-drone WEDGE formation setpoints compute correctly
+
+## Step 11 — Reproducibility Hardening
+- `scripts/verify.sh`: Headless verification script (10 tests, all pass)
+- Tests: 5 validator cases, executor determinism, swarm coordinator, SLAM navigator, validator file I/O
+- `.gitignore`: prevents pushing model weights, detection images, audit logs
+- All 10 verification tests pass on fresh checkout without GUI/GPU
+
+## Step 12 — Documentation
+- `README.md`: Quick start, architecture overview, example commands, challenges implemented, project tree, scaling story
+- `docs/ARCHITECTURE.md`: Detailed write-up — 5 contracts, 3 validation layers, state machine, data flow example, scaling to real-world
+- `CITATIONS.md`: Every open-source repo used, with URL, license, and what we took
+- `narration.txt`: This file — complete build log for demo & interview defense
+
+---
+

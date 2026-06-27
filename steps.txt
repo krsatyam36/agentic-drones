@@ -1,0 +1,195 @@
+Project: Agentic Drones (Omokai Robotics Take-Home Task)
+Pipeline: Prompt → LLM → Validated JSON → Deterministic Executor → Simulator
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 0 — INITIAL SETUP
+────────────────────────────────────────────────────────────────────────────
+
+Step 0.1    Create project structure
+              src/schema/mission.py, src/validator/validator.py,
+              src/executor/executor.py, src/llm/llm_node.py,
+              src/cli/cli.py, config/*.json, scripts/*.sh
+
+Step 0.2    Create Docker environment
+              Base: python:3.10-slim
+              Packages: mavsdk, pydantic, openai, opencv, ultralytics
+              Ollama for local LLM
+
+Step 0.3    Create source files (28 files committed in 5d8a324)
+              - 3 validation layers (structural, semantic, re-prompt)
+              - Deterministic executor state machine
+              - Dual-backend LLM node (Ollama + OpenAI)
+              - CLI interactive prompt loop
+              - Vision AI node (YOLOv8 + PID visual servoing)
+              - Swarm coordinator (4 formation types)
+              - SLAM navigator (SLAM Toolbox + Nav2)
+              - 10 headless verification tests
+              - Architecture docs + citations
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 1 — DOCKER SETUP (Phase 1 original)
+────────────────────────────────────────────────────────────────────────────
+
+Step 1.1    Write Dockerfile for ROS 2 Humble + PX4 SITL + Gazebo
+              Base: python:3.10-slim
+
+Step 1.2    Write docker-compose.yml (host networking, X11 forwarding)
+
+Step 1.3    Write .dockerignore (exclude .venv, models, output, etc.)
+
+Step 1.4    Write entrypoint.sh (sources ROS 2, checks ultralytics)
+
+Step 1.5    Build Docker image → FAILED
+              Error: px4io/px4-dev-ros2-humble base image inaccessible
+              Fix: Switch to osrf/ros:humble-desktop
+
+Step 1.6    Rebuild → FAILED
+              Error: Build context too large (.venv was included)
+              Fix: Created .dockerignore + added .venv to it
+
+Step 1.7    Rebuild → FAILED
+              Error: Ollama install fails — zstd missing
+              Fix: Added zstd to apt-get install list
+
+Step 1.8    Rebuild → FAILED
+              Error: sympy distutils conflict (apt sympy 1.9 vs pip)
+              Fix: Added --ignore-installed sympy==1.14.0 pip install
+
+Step 1.9    Rebuild → SUCCESS (commit 21d6493)
+              Image: agentic-drones:latest (python:3.10-slim base)
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 2 — DOCKER REBUILD WITH ROS 2 BASE (Current Session)
+────────────────────────────────────────────────────────────────────────────
+
+Step 2.1    Switch Dockerfile base to osrf/ros:humble-desktop
+              Rationale: Need ROS 2 for SLAM/Nav2 integration
+
+Step 2.2    Add PX4 build dependencies: kconfiglib, jinja2, pyros-genmsg, jsonschema
+
+Step 2.3    Add ROS 2 environment setup to bashrc and entrypoint.sh
+
+Step 2.4    Bake ultralytics into image (avoids 20-min runtime install)
+
+Step 2.5    Rebuild Docker image → SUCCESS
+              Image: agentic-drones:latest (osrf/ros:humble-desktop base)
+              All 17 build steps passed
+
+Step 2.6    Run container → SUCCESS
+              ultralytics 8.3.0 confirmed
+              ROS 2 Humble confirmed
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 3 — PX4 SITL SETUP
+────────────────────────────────────────────────────────────────────────────
+
+Step 3.1    Run docker/setup_px4.sh
+              Clones PX4-Autopilot v1.15.4 (shallow: --depth 1)
+              Initializes 24 submodules
+
+Step 3.2    Build PX4 → FAILED (attempt 1)
+              Error: ModuleNotFoundError: No module named 'menuconfig'
+              Root cause: kconfiglib not installed
+              Fix: pip install kconfiglib jinja2 (added to Dockerfile)
+
+Step 3.3    Build PX4 → FAILED (attempt 2)
+              Error: No module named 'genmsg'
+              Fix: pip install pyros-genmsg jsonschema
+
+Step 3.4    Build PX4 → FAILED (attempt 3)
+              Error: src/lib/version/build_git_version.h generation fails
+              Error trace: px_update_git_header.py line 138
+                nuttx_git_tag = re.findall(r'nuttx-[0-9]+\.[0-9]+\.[0-9]+',
+                                            nuttx_git_tags)[-1]
+              Root cause: --depth 1 shallow clone → no NuttX tags fetched
+              Fix 1 (setup_px4.sh): Change git fetch --tags --depth 1
+                                    → git fetch --tags (no depth limit)
+                                    Add NuttX submodule tag fetch
+              Fix 2 (px_update_git_header.py): Handle empty tag list
+                if not nuttx_matches:
+                    nuttx_git_tag = 'v0.0.0'   # fallback
+
+Step 3.5    Clean build artifacts → rebuild PX4 → SUCCESS
+              Binary: build/px4_sitl_default/bin/px4 (48 MB)
+              Targets: px4, examples__dyn_hello at 100%
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 4 — VERIFICATION
+────────────────────────────────────────────────────────────────────────────
+
+Step 4.1    Run bash scripts/verify.sh → 10/10 PASS
+
+Step 4.2    Validator Layer 1 test:
+              Input: "{bad json"
+              Expected: REJECT
+              Result: PASS ✓
+
+Step 4.3    Validator Layer 2 tests:
+              Input: perimeter_loop.json → ACCEPT
+              Input: bad_mission.json (altitude=500m, speed=100m/s) → REJECT
+              Input: missing TAKEOFF → REJECT
+              Input: missing LAND → REJECT
+              Result: 5/5 PASS ✓
+
+Step 4.4    Executor determinism test:
+              Run 1: python -m src.executor.executor --mission config/perimeter_loop.json
+              Run 2: python -m src.executor.executor --mission config/perimeter_loop.json
+              Compare audit logs (excluding timestamps) → IDENTICAL
+              Result: PASS ✓
+
+Step 4.5    Swarm coordinator test:
+              Create 3 drones (drone1, drone2, drone3)
+              Set formation = WEDGE, leader = drone1
+              Compute follower setpoints across 5 waypoints
+              Verify: drone2 offset = (-5, -2.5), drone3 offset = (-5, 2.5)
+              Result: PASS ✓
+
+Step 4.6    SLAM navigator test:
+              Initialize SLAMNavigator
+              Start SLAM Toolbox + Nav2 (simulated)
+              Plan route from (0,0) to (10,10) → 7 waypoints generated
+              Result: PASS ✓
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 5 — END-TO-END PIPELINE TEST
+────────────────────────────────────────────────────────────────────────────
+
+Step 5.1    Run executor from file (kill-LLM demo):
+              python -m src.executor.executor --mission config/perimeter_loop.json
+              Output:
+                Connection timeout → simulation mode
+                ARM → TAKEOFF(15m) → 8× GOTO → LAND → DONE
+                All 11 commands logged to audit_log.json
+              Result: Mission complete, final state DONE ✓
+
+Step 5.2    Run CLI with Ollama:
+              echo "Patrol the perimeter loop at 15m" | python -m src.cli.cli
+              Flow:
+                CLI sends prompt to LLMNode (Ollama backend, model=llama3.2)
+                LLM generates raw JSON with TAKEOFF(15m) + waypoints + LAND
+                Validator Layer 1: JSON parses OK
+                Validator Layer 2: altitude ≤50m ✓, starts TAKEOFF ✓, ends LAND ✓
+                MissionPlan published → saved to output/mission.json
+              Result: prompt → flight plan in ~5 seconds ✓
+
+Step 5.3    Run challenge modules:
+              python -m src.swarm.coordinator → 3-drone WEDGE formation ✓
+              python -m src.slam.slam_navigator → 3 waypoint nav mission ✓
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 6 — DOCUMENTATION
+────────────────────────────────────────────────────────────────────────────
+
+Step 6.1    Create steps.txt (this file) — algorithmic step trace
+
+Step 6.2    Update context.txt with complete session log
+
+────────────────────────────────────────────────────────────────────────────
+REMAINING WORK (Not Yet Done)
+────────────────────────────────────────────────────────────────────────────
+
+[ ]     Vision AI — Feed simulated Gazebo camera into vision_node
+[ ]     SLAM/Nav — Run with actual ROS 2 Nav2 + SLAM Toolbox
+[ ]     Multi-Agent — Launch multi-drone SITL + run coordinator
+[ ]     Demo video — Record prompt → flight in simulation
+[ ]     Defense rehearsal — Review all code, ready to answer questions

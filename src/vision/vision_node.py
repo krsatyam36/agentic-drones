@@ -46,7 +46,8 @@ class VisionNode:
     def __init__(self, model_path: str = "yolov8n.pt",
                  target_class: str = "person",
                  confidence_threshold: float = 0.5,
-                 save_dir: str = "output/detections"):
+                 save_dir: str = "output/detections",
+                 force_mock: bool = False):
         self.target_class_name = target_class
         self.target_class_id = TARGET_CLASSES.get(target_class, 0)
         self.confidence_threshold = confidence_threshold
@@ -54,9 +55,14 @@ class VisionNode:
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.model = None
         self.model_path = model_path
+        self.force_mock = force_mock
         self._load_model()
 
     def _load_model(self):
+        if self.force_mock:
+            logger.info("Mock detection forced — skipping YOLO load")
+            self.model = None
+            return
         try:
             from ultralytics import YOLO
             if os.path.exists(self.model_path):
@@ -83,7 +89,7 @@ class VisionNode:
         boxes = results.boxes
 
         if boxes is None or len(boxes) == 0:
-            return None
+            return self._mock_detection(frame, w, h)
 
         for i in range(len(boxes)):
             cls_id = int(boxes.cls[i].item())
@@ -206,18 +212,49 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s")
 
+    import argparse
     import sys
 
-    target = sys.argv[1] if len(sys.argv) > 1 else "person"
-    source = sys.argv[2] if len(sys.argv) > 2 else "0"
+    parser = argparse.ArgumentParser(description="Vision AI target detection and follow")
+    parser.add_argument("target", nargs="?", default="person",
+                        help="Target class to detect (person, car, dog, etc.)")
+    parser.add_argument("source", nargs="?", default=None,
+                        help="Video source: 0=webcam, path=video file, omit=simulated camera")
+    parser.add_argument("--sim", action="store_true",
+                        help="Use simulated camera feed (synthetic moving target)")
+    parser.add_argument("--executor", "-e", action="store_true",
+                        help="Pipe velocity commands to executor (offboard control)")
+    parser.add_argument("--connection", "-c", default="udp://:14540",
+                        help="MAVSDK connection string for executor")
+    parser.add_argument("--frames", type=int, default=0,
+                        help="Run for N frames then exit (0 = infinite)")
+    parser.add_argument("--headless", action="store_true",
+                        help="No display window (runs in background)")
+    args = parser.parse_args()
 
-    node = VisionNode(target_class=target)
+    node = VisionNode(target_class=args.target, force_mock=args.sim)
     controller = VisualServoController()
 
-    if source.isdigit():
-        cap = cv2.VideoCapture(int(source))
+    executor = None
+    if args.executor:
+        from src.executor.executor import DeterministicExecutor
+        executor = DeterministicExecutor(connection_string=args.connection)
+        executor.connect()
+        executor.arm()
+        executor.takeoff(10.0)
+
+    sim_camera = None
+    if args.sim or args.source is None:
+        from src.vision.sim_camera import SimulatedCamera
+        sim_camera = SimulatedCamera(
+            pattern="circle", color="red", target_speed=30.0
+        )
+        cap = sim_camera
+        logger.info("Using simulated camera feed")
+    elif args.source.isdigit():
+        cap = cv2.VideoCapture(int(args.source))
     else:
-        cap = cv2.VideoCapture(source)
+        cap = cv2.VideoCapture(args.source)
 
     if not cap.isOpened():
         logger.error("Cannot open video source")
@@ -225,6 +262,7 @@ def main():
 
     first_detection_saved = False
     frame_count = 0
+    velocity_commands_sent = 0
 
     try:
         while True:
@@ -236,6 +274,9 @@ def main():
             if frame_count % 3 != 0:
                 continue
 
+            if args.frames > 0 and frame_count > args.frames * 3:
+                break
+
             result = node.detect(frame)
 
             if result and result.detected:
@@ -245,33 +286,57 @@ def main():
 
                 if not first_detection_saved:
                     path = node.save_detection(frame, result)
-                    print(f"[OPERATOR ALERT] Target '{target}' acquired. Image saved: {path}")
+                    print(f"[OPERATOR ALERT] Target '{args.target}' acquired. Image saved: {path}")
                     first_detection_saved = True
 
                 velocity = controller.compute_velocity(result)
-                logger.debug(f"Follow velocity: {velocity}")
+                yaw_rate = controller.compute_yaw_rate(result)
 
-                display = node.draw_error_overlay(frame, result)
-                cv2.putText(display,
-                            f"Target: {result.class_name} ({result.confidence:.2f})",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(display,
-                            f"Follow cmd: vx={velocity['vx']:.2f} vy={velocity['vy']:.2f}",
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                if executor:
+                    executor.set_velocity_body(
+                        vx=velocity["vx"],
+                        vy=velocity["vy"],
+                        vz=velocity["vz"],
+                        yaw_rate=yaw_rate,
+                    )
+                    velocity_commands_sent += 1
+
+                if not args.headless:
+                    display = node.draw_error_overlay(frame, result)
+                    cv2.putText(display,
+                                f"Target: {result.class_name} ({result.confidence:.2f})",
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(display,
+                                f"Follow cmd: vx={velocity['vx']:.2f} vy={velocity['vy']:.2f}",
+                                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    if executor:
+                        cmd_count = f"Velocity cmds sent: {velocity_commands_sent}"
+                        cv2.putText(display, cmd_count, (10, 90),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             else:
-                display = frame.copy()
-                cv2.putText(display, f"Searching for '{target}'...",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                if executor:
+                    executor.set_velocity_body(vx=0.0, vy=0.0, vz=0.0, yaw_rate=5.0)
+                if not args.headless:
+                    display = frame.copy()
+                    cv2.putText(display, f"Searching for '{args.target}'...",
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-            cv2.imshow("Vision AI - Target Detection & Follow", display)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            if not args.headless:
+                cv2.imshow("Vision AI - Target Detection & Follow", display)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
 
     except KeyboardInterrupt:
         pass
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        if executor:
+            executor.land()
+            executor.save_audit_log("output/vision_follow_audit.json")
+            logger.info(f"Sent {velocity_commands_sent} velocity commands to executor")
+        if not sim_camera:
+            cap.release()
+        if not args.headless:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

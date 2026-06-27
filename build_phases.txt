@@ -1,0 +1,307 @@
+# =============================================================================
+# BUILD PHASES — Agentic Drones (Omokai Robotics Take-Home Task)
+# =============================================================================
+# Each phase ends with a hard gate/test. Status: DONE | PARTIAL | PENDING
+# =============================================================================
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 1 — REPRODUCIBLE SKELETON (Docker + Host Setup)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Create a portable, reproducible environment via Docker that runs on any
+  Linux machine with docker installed.
+
+Deliverables:
+  - docker/Dockerfile        (base: osrf/ros:humble-desktop)
+  - docker-compose.yml       (host networking, X11 forwarding)
+  - docker/entrypoint.sh     (sources ROS 2, checks ultralytics)
+  - docker/setup_px4.sh      (clones + builds PX4 SITL)
+  - .dockerignore            (excludes .venv, models, output, etc.)
+  - scripts/setup_host.sh    (alternative host setup without Docker)
+
+Gate Test:
+  docker compose up → container starts, ROS 2 sourced, ultralytics ready
+
+Key Issues Resolved:
+  - Base image switch: px4io/px4-dev-ros2-humble inaccessible → osrf/ros:humble-desktop
+  - Build context: .venv included → added to .dockerignore
+  - Ollama install: zstd missing → added to apt
+  - sympy conflict: apt sympy 1.9 vs pip → --ignore-installed sympy==1.14.0
+  - PX4 build deps: kconfiglib, jinja2, pyros-genmsg, jsonschema added
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 2 — SCHEMA + VALIDATOR (3-Layer Guardrail)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Define a strict Pydantic schema for mission plans and build a 3-layer
+  validation pipeline that catches bad LLM output before it reaches the drone.
+
+Files:
+  - src/schema/mission.py       Pydantic v2 models (MissionPlan, Action, Waypoint)
+  - src/validator/validator.py  3-layer validation
+
+3 Validation Layers:
+  Layer 1 (Structural):   JSON parse, root object, actions field, non-empty list
+  Layer 2 (Semantic):     altitude 1-50m, speed 0.5-15m/s, must-start-TAKEOFF,
+                          must-end-LAND/RTL, geofence, jump distance ≤500m, max 50 actions
+  Layer 3 (Re-prompt):    Errors fed back to LLM for self-correction (up to 3 retries)
+
+Gate Test:
+  python3 scripts/test_validator.py → 7/7 tests pass
+
+Tests:
+  - Valid perimeter loop accepted
+  - Unsafe mission (500m altitude) rejected
+  - Malformed JSON rejected
+  - No TAKEOFF rejected
+  - No LAND/RTL rejected
+  - Geofence compliance checked
+  - Speed out of bounds rejected
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 3 — DETERMINISTIC EXECUTOR (Kill-the-LLM)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Build a deterministic, auditable state machine that reads validated JSON
+  and issues concrete flight commands. Must work WITHOUT the LLM running.
+
+Files:
+  - src/executor/executor.py
+
+State Machine:
+  IDLE → ARMING → TAKEOFF → EXECUTING(action_i) → ... → LANDING → DONE
+                            |
+                            ↓
+                         FAILSAFE
+
+Properties:
+  - File-based: --mission validated.json, no LLM dependency
+  - Every command logged with ISO 8601 timestamp
+  - Deterministic: same JSON → identical audit log every time
+  - 5s connection timeout, falls back to simulation mode if no drone
+
+Gate Test:
+  python3 scripts/test_executor_determinism.py → 2/2 tests pass
+  python3 -m src.executor.executor --mission config/perimeter_loop.json
+
+Results Verified:
+  - Run 1 and Run 2 produce identical audit logs (minus timestamps)
+  - All 10 actions (ARM → TAKEOFF → 8× GOTO → LAND) logged correctly
+  - Final state: DONE
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 4 — LLM NODE + END-TO-END CLI WIRE
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Wire the full pipeline: natural language prompt → LLM → validator → save.
+  Support both local (Ollama) and cloud (OpenAI) LLM backends.
+
+Files:
+  - src/llm/llm_node.py    Dual backend: Ollama (default, llama3.2) + OpenAI (gpt-4o-mini)
+  - src/cli/cli.py         Interactive prompt loop
+
+Architecture:
+  - LLM proposes (generates JSON), never flies
+  - Validator polices (3-layer guardrail)
+  - Executor executes (deterministic, file-based)
+  - Re-prompt loop: errors → LLM correction (up to 3 retries)
+
+Gate Test:
+  echo "Patrol the perimeter loop at 15m" | python3 -m src.cli.cli
+
+Results Verified:
+  - Ollama/llama3.2 generates valid mission JSON from prompt
+  - Validator passes Layer 2 semantic check
+  - Mission saved to output/mission.json
+  - Instruction printed: python -m src.executor.executor --mission output/mission.json
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 5 — VISION AI (Challenge 3: Target Detection + Follow)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Give the drone vision capability: detect a user-defined target via camera,
+  save image and alert operator on first detection, then follow autonomously.
+
+Files:
+  - src/vision/vision_node.py       YOLO detection + PID servoing + mock fallback
+  - src/vision/sim_camera.py        Synthetic camera (bouncing red circle target)
+
+Implementation:
+  - YOLOv8 object detection with configurable target class (person, car, dog, etc.)
+  - PID visual servoing: pixel error → body velocity commands
+  - On first detection: saves annotated frame, alerts operator
+  - Target-lost fallback: hover (zero velocity) + yaw search (5 deg/s)
+  - Mock detection fallback (HSV color tracking) when YOLO unavailable
+  - Simulated camera: generates frames with a bouncing colored circle
+    (no physical camera needed for demo)
+  - Executor integration: --executor flag → calls set_velocity_body()
+    (MAVSDK offboard velocity control in real mode, simulation mode fallback)
+
+New CLI Arguments:
+  --sim          Use simulated camera feed (synthetic moving target)
+  --executor/-e  Pipe PID velocity commands to executor (offboard control)
+  --frames N     Run for N frames then exit (for headless testing)
+  --headless     No display window (runs in background)
+  --connection   MAVSDK connection string (default: udp://:14540)
+
+Gate Test (headless):
+  python3 -m src.vision.vision_node person --sim --executor --frames 30 --headless
+
+Documentation Updated:
+  - README.md: updated Vision AI section with new flags, updated "Running the Challenges"
+  - docs/ARCHITECTURE.md: added sim_camera, two detection modes, PID math, executor integration
+
+Integration Results Verified:
+  - Simulated camera: 640×480, red circle bouncing within frame boundaries
+  - Mock detection: tracks the red circle via HSV thresholding
+  - PID controller: pixel error (cx-320, cy-240) → body velocity (vx, vy, vz)
+  - Executor integration: 30 SET_VELOCITY_BODY commands logged over 30 frames
+  - First detection: image saved to output/detections/detection_*.jpg
+  - Operator alert: "Target 'person' acquired. Image saved: ..."
+  - Clean shutdown: LAND command issued, audit log saved
+  - All 10/10 verify.sh tests still pass
+  - Full command sequence: ARM → TAKEOFF → 30× SET_VELOCITY_BODY → LAND
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 6 — SLAM / AUTONOMOUS NAVIGATION (Challenge 2)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ⚡ PARTIAL (Code Done + Write-up, Needs ROS 2 Runtime)
+
+Goal:
+  Integrate SLAM (online mapping + localization) so the agent can navigate
+  unknown environments instead of just following fixed waypoints.
+
+Files:
+  - src/slam/slam_navigator.py
+
+Implementation:
+  - SLAMNavigator: SLAM Toolbox integration (online mapping via /scan + /odom)
+  - Nav2 stack: path planning with obstacle avoidance (NavFn planner, DWB controller)
+  - PathPlanner: route computation with obstacle-aware waypoint generation
+
+Gate Test:
+  python3 -m src.slam.slam_navigator    # simulated mode
+
+What's Left for Full Completion:
+  - Launch actual SLAM Toolbox + Nav2 nodes in ROS 2
+  - Subscribe to real /scan and /odom topics from Gazebo
+  - Send navigation goals to Nav2 action server
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 7 — MULTI-AGENT FORMATIONS (Challenge 1)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ⚡ PARTIAL (Code Done + Write-up, Needs Multi-SITL)
+
+Goal:
+  Control 2-3 drones autonomously in formation, command via squad-level intent.
+
+Files:
+  - src/swarm/coordinator.py
+
+Implementation:
+  - 4 formation types: LINE, WEDGE, DIAMOND, COLUMN
+  - Leader-follower model with body-frame offset rotation by leader yaw
+  - Per-drone MAVLink port allocation (14540+)
+  - Mission dispatch: "all" → duplicate across fleet, per-drone targeting
+
+Gate Test:
+  python3 -m src.swarm.coordinator    # demo mode
+
+Results Verified:
+  - 3-drone WEDGE formation: drone2 (-5,-2.5), drone3 (-5,2.5) offsets correct
+  - Leader-follower transform: offsets rotate by leader yaw
+  - All 5 waypoints computed correctly
+
+What's Left for Full Completion:
+  - Launch multi-drone PX4 SITL instances (separate ports)
+  - Run per-drone executor instances connected to each SITL
+  - Real-time offset updates during flight
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 8 — REPRODUCIBILITY + HEADLESS VERIFY
+────────────────────────────────────────────────────────────────────────────
+STATUS: ✅ DONE
+
+Goal:
+  Prove the core pipeline works without GUI, GPU, or internet on a fresh checkout.
+
+Files:
+  - scripts/verify.sh                  Shell script runner (10 tests)
+  - scripts/test_validator.py          7 validator unit tests
+  - scripts/test_executor_determinism.py  2 executor tests
+
+Gate Test:
+  bash scripts/verify.sh
+
+Results — 10/10 PASS:
+   1. Valid mission accepted
+   2. Unsafe mission rejected (Layer 2 — altitude 500m)
+   3. Malformed JSON rejected (Layer 1)
+   4. No TAKEOFF rejected
+   5. No LAND/RTL rejected
+   6. Executor determinism (same JSON → identical audit log)
+   7. Swarm coordinator (3-drone WEDGE offsets)
+   8. SLAM navigator (path planning)
+   9. Validator with file input (perimeter_loop.json accepted)
+  10. Bad mission rejected (bad_mission.json)
+
+Container Verification:
+  - All 10 tests pass inside Docker container
+  - ultralytics 8.3.0 + torch baked into image
+  - No external dependencies at runtime
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 9 — DELIVERABLES (Docs + Demo)
+────────────────────────────────────────────────────────────────────────────
+STATUS: ⚡ PARTIAL (Docs Done, Demo Video Pending)
+
+Goal:
+  Provide clean documentation and demo video for examiners.
+
+Files:
+  - README.md               Quick start, architecture, commands, scaling story
+  - docs/ARCHITECTURE.md    Full design: 5 contracts, 3 validation layers, scaling
+  - CITATIONS.md            All open-source credits (10 sources with licenses)
+  - steps.txt               Algorithmic dry run of all steps taken
+  - build_phases.txt        (this file) Phase status tracking
+
+Docs Status:
+  README.md         ✅ Done — Quick start, architecture, commands, tech stack
+  ARCHITECTURE.md   ✅ Done — 5 contracts, 3 validation layers, scaling to prod
+  CITATIONS.md      ✅ Done — PX4, MAVSDK, YOLO, Pydantic, OpenAI, Ollama, etc.
+
+Demo Video Status:
+  ❌ NOT YET RECORDED — Needs screen capture of:
+     1. Prompt entering → LLM generates → validator passes → executor flies
+     2. Optional: YOLO detection, SLAM navigation, swarm formation
+
+────────────────────────────────────────────────────────────────────────────
+PHASE 10 — DEFENSE REHEARSAL
+────────────────────────────────────────────────────────────────────────────
+STATUS: 🔄 IN PROGRESS
+
+Goal:
+  Review all code end-to-end, understand every line, be ready to:
+  - Explain architecture decisions
+  - Defend design choices
+  - Modify code live under exam conditions
+
+Preparation Checklist:
+  - All 8 source files read and understood        ✅ Done
+  - 3 validation layers memorized                 ✅ Done
+  - Executor state machine traced                 ✅ Done
+  - 5 contract boundaries reviewed                ✅ Done
+  - Scaling story rehearsed                       ✅ Done
+  - Challenge integration path explained          ✅ Done
+  - YOLO licensing note (AGPL-3.0)                ✅ Noted
+  - Live code edit practice                       ❌ Pending

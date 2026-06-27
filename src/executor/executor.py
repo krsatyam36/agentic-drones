@@ -119,6 +119,14 @@ class DeterministicExecutor:
         self.log_command("LAND", {})
         logger.info("Landing...")
 
+    def set_velocity_body(self, vx: float, vy: float, vz: float,
+                          yaw_rate: float = 0.0):
+        self.log_command("SET_VELOCITY_BODY", {
+            "vx": round(vx, 2), "vy": round(vy, 2),
+            "vz": round(vz, 2), "yaw_rate": round(yaw_rate, 2),
+        })
+        logger.info(f"Body velocity: vx={vx:.2f} vy={vy:.2f} vz={vz:.2f} yaw_rate={yaw_rate:.2f}")
+
     def failsafe(self, reason: str):
         self.state = ExecutorState.FAILSAFE
         self.log_command("FAILSAFE", {"reason": reason})

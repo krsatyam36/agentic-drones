@@ -1,0 +1,263 @@
+================================================================================
+ RUN.TXT — Live PX4 SITL + jMAVSim + Pipeline Execution
+================================================================================
+ Omokai Robotics — Agentic Drones Take-Home Task
+================================================================================
+
+This file provides exact terminal commands to run a live end-to-end simulation
+with a real PX4 SITL stack + 3D visualizer, captured via OBS Studio for the
+examiner.
+
+
+WHY `make px4_sitl gz_x500` FAILED
+================================================================================
+
+The build script (`docker/setup_px4.sh`) runs `make px4_sitl gazebo-classic` and
+`make px4_sitl gz_x500` with `2>/dev/null` — errors are HIDDEN. Both fail:
+
+1. `gazebo-classic`: Not a valid make target in PX4 v1.15.4 (the Makefile only
+   has internal `sitl_gazebo-classic` as a wrapper target). Additionally, no
+   `gazebo` or `libgazebo-dev` packages are installed in the container.
+
+2. `gz_x500`: Not a valid make target in PX4 v1.15.4. The `Tools/simulation/gz/`
+   directory exists but `gz` binary is not installed (missing gz-garden package).
+
+3. Fallback: `make px4_sitl` builds a HEADLESS PX4 binary — but it DOES include
+   the `simulator_mavlink` module (confirmed: 14 references in binary). This
+   module connects PX4 to any external MAVLink-based simulator.
+
+THE FIX: jMAVSim (already built from Java source) runs externally as the
+simulator. PX4's `simulator_mavlink` module connects to it over UDP:4560.
+No rebuild needed — the existing `px4` binary works as-is.
+
+
+HOW IT WORKS
+================================================================================
+
+jMAVSim (UDP:4560)  ←→  PX4 SITL (simulator_mavlink)  ←→  MAVSDK (UDP:14540)
+     (3D view)              (autopilot firmware)            (our executor)
+
+When PX4 starts with `PX4_SIM_MODEL=iris`, the startup script (rcS →
+px4-rc.simulator, else branch) runs:
+    simulator_mavlink start -t 127.0.0.1 4560
+
+This connects PX4 to jMAVSim. The iris quadrotor then flies in the 3D world.
+
+
+Prerequisites (verify before starting):
+  - Container running: docker exec -it agentic-drones-test bash
+  - PX4 SITL binary: /workspace/src/PX4-Autopilot/build/px4_sitl_default/bin/px4
+  - jMAVSim jar: /workspace/src/PX4-Autopilot/Tools/simulation/jmavsim/jMAVSim/out/production/jmavsim_run.jar
+  - Python deps: mavsdk, pydantic, ultralytics, openai
+  - OBS Studio open, configured to capture jMAVSim window + terminals
+
+If jMAVSim jar needs building:
+    cd /workspace/src/PX4-Autopilot/Tools/simulation/jmavsim/jMAVSim
+    ant create_run_jar copy_res
+    ls out/production/jmavsim_run.jar   # confirm ~2.3 MB jar exists
+
+
+RESET STALE STATE (run once before starting):
+    pkill -f px4 2>/dev/null; pkill -f jmavsim 2>/dev/null; sleep 2; echo "Cleaned"
+
+
+================================================================================
+ PANE 1 — jMAVSim 3D Visualizer
+================================================================================
+ Window Title: "jMAVSim — 3D quadrotor visualization"
+ OBS capture: Window → jMAVSim (Java window with blue sky + ground grid)
+
+Commands:
+    export PX4_SIM_HOST_ADDR=127.0.0.1
+    cd /workspace/src/PX4-Autopilot/Tools/simulation/jmavsim/jMAVSim
+    java -Djava.ext.dirs=lib \
+         --add-exports java.base/java.lang=ALL-UNNAMED \
+         --add-exports java.desktop/sun.awt=ALL-UNNAMED \
+         --add-exports java.desktop/sun.java2d=ALL-UNNAMED \
+         -jar out/production/jmavsim_run.jar -udp 4560
+
+Expected output:
+    [INFO] jMAVSim 3.7.0
+    [INFO] Listening on UDP port 4560
+    [INFO] Waiting for PX4 SITL connection...
+
+Leave this running. jMAVSim will show a blank blue sky until PX4 connects.
+
+
+================================================================================
+ PANE 2 — PX4 SITL Autopilot
+================================================================================
+ This pane shows the PX4 boot log, parameter loading, EKF initialization, and
+ actual flight controller state. OBS can capture the terminal output.
+
+Commands:
+    export PX4_SIM_MODEL=iris
+    export PX4_SIM_HOST_ADDR=127.0.0.1
+    cd /workspace/src/PX4-Autopilot/build/px4_sitl_default
+    ./bin/px4 -d -s etc/init.d-posix/rcS
+
+Expected startup sequence (visible in terminal):
+    Built for POSIX_LINUX
+    Starting PX4...
+    Startup script: etc/init.d-posix/rcS
+    [logger] file: rootfs/fs/microsd/log/... (boot log)
+    [param] loaded 1234 parameters
+    [mavlink] port 14540 (udp), instance 0
+    [mavlink] port 14550 (udp), instance 0
+    [commander] ARMED by RC or auto-start
+    [ecl/EKF] EKF GPS checks passed
+    [vehicle] publishing position, attitude, velocity
+
+Wait for "ready to fly" or "EKF GPS checks passed" before proceeding.
+
+The jMAVSim window should now show a quadrotor sitting on the ground grid.
+
+
+================================================================================
+ PANE 3 — LLM CLI: Generate Mission from Natural Language
+================================================================================
+ Demonstrates Prompt → LLM → Validated Mission JSON.
+
+Commands:
+    cd /workspace
+    python3 -m src.cli.cli
+
+At the prompt, enter:
+    > Patrol the perimeter loop at 15m
+
+Expected output:
+    [LLM] Generating mission from prompt...
+    [VALIDATOR] Layer 1 passed (valid JSON)
+    [VALIDATOR] Layer 2 passed (action sequence valid)
+    [VALIDATOR] ✅ Mission validated
+    [SAVED] Mission written to output/mission.json
+
+Exit the CLI with Ctrl+D or type "exit".
+
+Verify:
+    cat output/mission.json | python3 -m json.tool
+
+For a more complex prompt:
+    > inspect the northwest corner, loiter for 10s, then return to home
+    > follow the red truck at 10m altitude, maintaining 5m distance
+    > patrol in a diamond formation with 3 other drones
+
+
+================================================================================
+ PANE 4 — Deterministic Executor (Kill-the-LLM Demo)
+================================================================================
+ This is the core demonstration: a file-based executor driving the real PX4
+ simulation via MAVSDK. No LLM running — pure deterministic flight.
+
+Commands:
+    cd /workspace
+    python3 -m src.executor.executor --mission output/mission.json
+
+Expected output:
+    [INFO] Executor starting. Mode: SIMULATION (no drone detected, timeout 5s)
+    [INFO] Loading mission from output/mission.json
+    [INFO] State: IDLE → ARMING
+    [CMD] arm()
+    [INFO] State: ARMING → TAKEOFF
+    [CMD] takeoff(altitude=15)
+    [INFO] State: TAKEOFF → EXECUTING action 1/9
+    [CMD] goto(lat=50, lon=0, alt=15, speed=5)
+    [INFO] Waypoint reached
+    [CMD] goto(lat=50, lon=50, alt=15, speed=5)
+    ... (all waypoints execute)
+    [INFO] State: EXECUTING → LANDING
+    [CMD] land()
+    [INFO] State: LANDING → DONE
+    [INFO] Mission complete. Audit log: output/demo/executor_audit.json
+
+Verification:
+    cat output/demo/executor_audit.json | python3 -m json.tool
+    # Should show all actions with ISO timestamps
+
+While the executor runs, the jMAVSim window should show the quadrotor:
+  1. Arming (props spin up)
+  2. Takeoff (rises to 15m)
+  3. Flying the perimeter square
+  4. Landing back at origin
+
+
+================================================================================
+ PANE 5 (Optional) — Vision AI Pipeline (PID Visual Servoing)
+================================================================================
+ If you want to demonstrate the vision pipeline with the SITL:
+    The vision node uses a SIMULATED camera (bouncing red circle) and pipes
+    PID velocity vectors to the executor. It does NOT use the jMAVSim camera.
+
+Commands:
+    cd /workspace
+    python3 -m src.vision.vision_node person --sim --executor --frames 60
+
+Expected output:
+    [VISION] No YOLO model loaded (force_mock=True)
+    [VISION] Using simulated camera: bouncing red circle
+    [VISION] Frame 0: center at (320, 240), error=(0,0), cmd=(0,0,0,0)
+    [VISION] Frame 1: center at (315, 238), error=(-5,-2), cmd=(0.3,0.1,0,-0.02)
+    ...
+    [VISION] Frame 60: sequence complete
+    [EXECUTOR] Audit: 62 entries (ARM + TAKEOFF + 60× velocity commands + LAND)
+
+To run headless:
+    python3 -m src.vision.vision_node person --sim --executor --frames 30 --headless
+
+
+================================================================================
+ OBS STUDIO CAPTURE SETUP
+================================================================================
+
+Scenes to create:
+  1. "Opening" — Static title card (5 seconds)
+  2. "Demo" — 4-pane layout:
+        - jMAVSim window (primary, 50% of frame)
+        - Terminal: PX4 SITL (20%)
+        - Terminal: Executor output (20%)
+        - Terminal: LLM CLI input/output (10%)
+  3. "Closing" — Results summary card
+
+Sources:
+  - Window Capture (jMAVSim) — the 3D simulation view
+  - Window/Text Capture — terminals showing each pane
+  - Text (GDI+) — overlay labels for each pane
+
+Recommended OBS settings:
+  - Output: 1920×1080, 30 fps
+  - Encoder: hardware (NVENC/AMF) or x264 medium
+  - Bitrate: 15000 Kbps (or higher for demo quality)
+
+
+================================================================================
+ TROUBLESHOOTING
+================================================================================
+
+Problem: `make px4_sitl gazebo-classic` or `make px4_sitl gz_x500` fails
+  Cause: No Gazebo/Gazebo-Classic packages installed. jMAVSim is the correct
+         visualizer for this setup. See "WHY `make px4_sitl gz_x500` FAILED"
+         above. Use the jMAVSim + binary approach instead of make targets.
+
+Problem: PX4 SITL fails with "no airframe selected"
+  Fix: Ensure PX4_SIM_MODEL=iris is exported before starting px4
+
+Problem: jMAVSim shows "Could not open display" or GL errors
+  Fix: Container needs X11 forwarding. Ensure DISPLAY is set and X11 socket
+       is mounted. Check: echo $DISPLAY; ls -la /tmp/.X11-unix/
+  Fallback: Run PX4 headless (no jMAVSim) — PX4 still simulates the drone,
+            just without 3D visuals. The executor works identically.
+
+Problem: "MAVSDK connection timeout" after 5 seconds
+  Fix: Ensure PX4 SITL is running BEFORE starting the executor.
+       Verify port 14540 is listening: ss -tulpn | grep 14540
+
+Problem: jMAVSim jar not found or build fails
+  Fix: Run ant from the jMAVSim directory as shown in prerequisites above.
+
+Problem: LLM returns invalid mission JSON
+  Fix: The 3-layer validator will catch it and re-prompt automatically.
+       If retries are exhausted, try a simpler prompt.
+
+================================================================================
+ END RUN.TXT
+================================================================================

@@ -84,16 +84,58 @@ IDLE → ARMING → TAKEOFF → EXECUTING(action_i) → ... → LANDING → DONE
 ## Vision AI (Challenge 3) Architecture
 
 ```
-Camera → YOLOv8 Detection → Pixel Error → PID Controller → Body Velocity → Drone
-                                        ↓
-                              Image saved on first detection
-                              Operator notified: "Target acquired"
+              ┌─ Webcam ─┐
+              │ Video file│
+              │ SimCamera │──→ VisionNode.detect() ─→ PID Controller ─→ Executor.set_velocity_body()
+              └───────────┘         ↓
+                              Image saved (1st detection)
+                              Operator: "Target acquired"
 ```
 
-- **Configurable target**: user sets target class ("person", "car", etc.) via parameter
-- **On detection**: frame saved with bounding box overlay, operator alerted
-- **Follow**: pixel error (bounding box center - frame center) drives PID → MAVSDK offboard velocity
-- **Lost target fallback**: hover in place / search pattern
+### Two Detection Modes
+
+1. **YOLOv8 mode** (default): Loads ultralytics YOLO model, runs inference on every frame.
+   Filters results by target class ID and confidence threshold.
+2. **Mock detection mode** (`--sim` or when ultralytics unavailable): HSV color thresholding
+   + contour detection. Falls back to mock when YOLO finds nothing (graceful degradation).
+
+### Simulated Camera (`src/vision/sim_camera.py`)
+
+Generates synthetic 640×480 frames with a bouncing colored circle:
+- Circle position follows velocity-vector physics, bouncing off frame edges
+- Replaces need for physical camera or Gazebo camera feed in headless demos
+- Used with `--sim` flag; `--executor` flag pipes PID output to executor
+
+### PID Visual Servoing
+
+- **Pixel error**: `(cx - frame_center_x, cy - frame_center_y)` where cx,cy is bounding box center
+- **Proportional control**: `vx = -Kp_x * error_x`, `vy = -Kp_y * error_y`
+- **Depth control**: `vz = Kp_z * (area_target - area_fraction) * 100` (closer when target small)
+- **Yaw rate**: `yaw_rate = -Kp_yaw * error_x` (turn toward target horizontally)
+- **Clipping**: All velocities clamped to `[-max_speed, +max_speed]`
+
+### Executor Integration
+
+```
+PID velocity dict ─→ Executor.set_velocity_body(vx, vy, vz, yaw_rate)
+                         ↓
+                    [CMD] SET_VELOCITY_BODY logged with timestamp
+                         ↓
+                    MAVSDK offboard.set_velocity_body() [real mode]
+                    Simulation mode fallback [no drone connected]
+```
+
+- `Executor.set_velocity_body()` added for offboard velocity control
+- In real mode: sends MAVSDK `OffboardVelocityBodyYawspeed` commands to PX4
+- In simulation mode: logs every command to audit trail (deterministic)
+- Target-lost: sends zero velocity + yaw search rotation (5 deg/s)
+
+### Headless Verification
+
+```bash
+python3 -m src.vision.vision_node person --sim --executor --frames 30 --headless
+```
+Produces 33 audit entries: ARM → TAKEOFF → 30× SET_VELOCITY_BODY → LAND
 
 ## Multi-Agent Formations (Challenge 1) Architecture
 

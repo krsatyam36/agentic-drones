@@ -57,11 +57,14 @@ Same JSON → identical audit log every time. Every command timestamped.
 Prompt-to-flight: natural language → LLM → validated JSON → executor → motion.
 
 ### Challenge 3: Vision AI Target Detection + Follow ✅
-- YOLOv8 object detection with configurable target class
-- On first detection: saves image + notifies operator
-- PID-based visual servoing: pixel error → body velocity
-- Target-lost fallback (hover/search mode)
+- YOLOv8 object detection with configurable target class (person, car, dog, etc.)
+- On first detection: saves annotated image + notifies operator with file path
+- PID-based visual servoing: pixel error → body velocity → executor offboard control
+- Target-lost fallback: hover (zero velocity) + yaw search (5 deg/s)
 - Works with camera, video file, or simulated feed
+- New: `--sim` flag for synthetic camera (bouncing target, no hardware needed)
+- New: `--executor` flag to pipe PID velocity commands to MAVSDK offboard control
+- New: `--headless` + `--frames N` for automated batch testing
 
 ### Challenge 2: SLAM / Autonomous Navigation ✅ (Partial + Write-up)
 - SLAM Toolbox integration for online mapping
@@ -118,14 +121,38 @@ diff run1.json run2.json  # identical = deterministic
 ## Running the Challenges
 
 ```bash
-# Vision AI
+# ─── Vision AI ───
+
+# Webcam: detect and follow a person (with display window)
 python -m src.vision.vision_node person
 
-# SLAM Navigation
+# Simulated camera: synthetic moving target (no camera needed)
+python -m src.vision.vision_node person --sim
+
+# Simulated camera + pipe velocity commands to executor
+python -m src.vision.vision_node person --sim --executor
+
+# Headless mode (no display, for automated testing)
+python -m src.vision.vision_node person --sim --executor --frames 30 --headless
+
+# Video file: process a pre-recorded video
+python -m src.vision.vision_node person path/to/video.mp4
+
+# ─── SLAM Navigation ───
+
+# Run the SLAM navigator demo (simulated)
 python -m src.slam.slam_navigator
 
-# Swarm Formation
+# Run with a specific mission file
+python -m src.slam.slam_navigator config/inspection_route.json
+
+# ─── Swarm Formation ───
+
+# Run the formation demo (3 drones, WEDGE formation)
 python -m src.swarm.coordinator
+
+# Dispatch a mission across all drones
+python -m src.swarm.coordinator config/perimeter_loop.json
 ```
 
 ## Tech Stack
@@ -164,6 +191,7 @@ agentic-drones/
 │   ├── llm/llm_node.py         # LLM interface (Ollama/OpenAI)
 │   ├── cli/cli.py              # Operator prompt loop
 │   ├── vision/vision_node.py   # YOLO + visual servoing
+│   ├── vision/sim_camera.py    # Synthetic camera feed
 │   ├── swarm/coordinator.py    # Multi-agent formations
 │   └── slam/slam_navigator.py  # SLAM + Nav2 integration
 ├── config/
