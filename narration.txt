@@ -1,4 +1,4 @@
-# Omokai Robotics Task — Narration Log
+# Agentic Drones Project — Project Log
 # Purpose: Track every step taken chronologically for demo & interview defense.
 
 ---
@@ -6,7 +6,7 @@
 ## Step 0 — Project Initialization
 - Repository initialized with planning docs: task.txt, plan.txt, techstack.txt, workflow.txt, workflow_claude.txt, claudeopus4.8high_playbook.txt.
 - README.md placeholder created.
-- Aim: Direct Offer tier — core pipeline + all 3 senior challenges.
+- Aim: full tier — core pipeline + all 3 senior challenges.
 
 ---
 

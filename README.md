@@ -1,4 +1,4 @@
-# Agentic Drones — Omokai Robotics Take-Home Task
+# Agentic Drones — Agentic Drones Project
 
 Prompt → LLM → Validated JSON → Deterministic Executor → Simulator
 
@@ -13,7 +13,7 @@ docker compose build
 # 2. Start the container (with X11 for GUI)
 xhost +local:docker
 docker compose up -d
-docker compose exec omokai bash
+docker compose exec agentic-drones bash
 
 # 3. Run headless verification (no GUI needed)
 bash scripts/verify.sh

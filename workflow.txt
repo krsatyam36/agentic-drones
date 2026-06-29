@@ -1,0 +1,149 @@
+# Atomic Workflow Breakdown: Agentic Drones Project
+
+This document breaks down the project into its smallest executable components (atoms), creating a step-by-step sequential workflow to achieve the Core Task and all 3 Senior Challenges (full implementation tier).
+
+---
+
+## Phase 1: Environment & Containerization (The Foundation)
+Goal: A 100% reproducible development environment.
+
+1.  **Initialize Project Structure**
+    *   `mkdir -p agentic-drones/{docker,src,docs,scripts,config,models}`
+2.  **Author `Dockerfile`**
+    *   Set Base Image: `osrf/ros:humble-desktop` (Ubuntu 22.04).
+    *   Add system packages: `git, wget, curl, python3-pip, x11-apps, tmux`.
+    *   Install PX4 Autopilot toolchain (download and run PX4 `ubuntu.sh`).
+    *   Clone `PX4-Autopilot` repo into the workspace.
+    *   Install Simulation backend: Gazebo Harmonic or Classic (dependent on PX4's Humble template).
+    *   Install Python packages via `pip`: `mavsdk, openai, langchain, pydantic, ultralytics (YOLO), opencv-python, cv-bridge`.
+    *   Add `entrypoint.sh` to source ROS 2 and PX4 variables automatically.
+3.  **Author `docker-compose.yml`**
+    *   Define service: `drone_sim`.
+    *   Mount local `./src` to container `/workspace/src`.
+    *   Enable X11 socket forwarding: `volumes: ["/tmp/.X11-unix:/tmp/.X11-unix"]` and `environment: ["DISPLAY=$DISPLAY"]`.
+    *   Enable GPU passthrough (NVIDIA runtime) for YOLO hardware acceleration.
+4.  **Validate Environment**
+    *   Run `docker compose up`.
+    *   Verify Gazebo GUI opens on the host machine.
+    *   Verify PX4 SITL successfully connects to the Gazebo model.
+
+---
+
+## Phase 2: The Core Task Pipeline (NL -> Drone Action)
+Goal: A guardrailed, deterministic flow from a text prompt to drone movement.
+
+1.  **Define the Schema (The Guardrail)**
+    *   Create `src/schema/mission.py`.
+    *   Write Pydantic models: `Coordinate(x, y, z)`, `ActionType (TAKEOFF, GOTO, LAND)`.
+    *   Write `MissionPlan(List[Action])` containing strict validators (e.g., `assert altitude <= 50`, `assert speed <= 15`).
+2.  **Build the LLM Node (`llm_node.py`)**
+    *   Write a ROS 2 Node (or standard python script) that takes a string input.
+    *   Write the System Prompt: "You are a drone path planner. Map user intents to this JSON schema..."
+    *   Implement API call to OpenAI (or Ollama for local execution).
+    *   Force LLM output to strictly match JSON format (using OpenAI function calling or strict JSON mode).
+    *   Output the raw JSON string to a ROS topic `/llm_raw_mission`.
+3.  **Build the Validator Node (`validator_node.py`)**
+    *   Subscribe to `/llm_raw_mission`.
+    *   Attempt to load the string into the Pydantic `MissionPlan` model.
+    *   If validation fails: Publish error back to operator (or feed error back to LLM for self-correction).
+    *   If validation succeeds: Publish structured mission to `/validated_mission`.
+4.  **Build the Deterministic Executor (`executor_node.py`)**
+    *   Subscribe to `/validated_mission`.
+    *   Initialize connection to drone via MAVSDK (`System(mavsdk_server_address="udp://:14540")`).
+    *   Implement state machine loop reading actions:
+        *   If TAKEOFF: `await drone.action.arm()`, `await drone.action.takeoff()`.
+        *   If GOTO: `await drone.action.goto_location(lat, lon, alt, yaw)`.
+        *   If LAND: `await drone.action.land()`.
+    *   Publish telemetry (Position, Battery, Flight Mode) to a `/drone_status` topic.
+5.  **Build the Operator CLI (`cli.py`)**
+    *   A simple terminal prompt `>>> Enter command:`.
+    *   Publishes the string to the LLM node.
+
+---
+
+## Phase 3: Challenge 2 - SLAM & Autonomous Navigation
+Goal: Drone navigates intelligently around obstacles rather than just flying straight lines.
+
+1.  **Sensor Integration in Gazebo**
+    *   Modify the PX4 Gazebo drone model (`iris` or `x500`) SDF file.
+    *   Attach a 2D LiDAR or 3D Depth Camera plugin.
+    *   Ensure point cloud/laser scan data is published to ROS 2 topics (`/scan` or `/camera/depth`).
+2.  **Mapping & Localization Integration**
+    *   Create a ROS 2 launch file to start `slam_toolbox` or `rtabmap_ros`.
+    *   Configure it to ingest `/scan` and Odometry (from PX4).
+    *   Verify mapping works by flying manually and viewing the generated `/map` in RViz2.
+3.  **Path Planning Integration (Nav2)**
+    *   Configure ROS 2 Nav2 for the drone (often tricky in 3D, easier to constrain flight to a fixed altitude like 5m and treat as a 2D holonomic robot).
+    *   Update `executor_node.py`: If the JSON command is "NAVIGATE_TO", instead of sending a MAVSDK `goto` command (which flies straight), send a Goal Pose to Nav2 Action Server. Nav2 will calculate the obstacle-free path and send velocity commands.
+
+---
+
+## Phase 4: Challenge 3 - Vision AI (Target Detection & Follow)
+Goal: Recognize objects and autonomously follow them.
+
+1.  **Camera Sensor Setup**
+    *   Modify the Gazebo SDF to include a forward/downward facing RGB camera plugin.
+    *   Ensure image stream publishes to `/camera/image_raw`.
+2.  **YOLOv8 Detection Node (`vision_node.py`)**
+    *   Subscribe to `/camera/image_raw` using `cv_bridge`.
+    *   Load an Ultralytics YOLOv8 model.
+    *   Run inference on each frame.
+    *   Filter for the target object (e.g., "person" or "car").
+    *   Calculate the pixel offset from the center of the bounding box to the center of the camera frame ($e_x, e_y$).
+    *   Publish error values to `/vision/target_error`.
+    *   *Trigger*: On first detection, save frame using OpenCV `imwrite` and print/log "Target found, image saved at X".
+3.  **Visual Servoing (Follow Logic)**
+    *   Update `executor_node.py` with a "TRACKING" mode.
+    *   When in TRACKING mode, switch PX4 to **Offboard Mode**.
+    *   Subscribe to `/vision/target_error`.
+    *   Implement a simple PID Controller: Convert pixel errors ($e_x, e_y$) into Body Velocity commands (`set_velocity_body` in MAVSDK).
+        *   If target is left, command roll left (negative Y velocity).
+        *   If target bounding box area is too small (target is far), command pitch forward (positive X velocity).
+
+---
+
+## Phase 5: Challenge 1 - Multi-Agent Formations
+Goal: Control multiple drones in coordination.
+
+1.  **Multi-Instance Simulation Setup**
+    *   Update Gazebo launch scripts to spawn 3 distinct drones.
+    *   Assign unique MAVLink UDP ports (e.g., 14540, 14541, 14542).
+    *   Separate ROS topics using namespaces (`/drone1/...`, `/drone2/...`).
+2.  **Update LLM Schema & Node**
+    *   Update JSON schema to support targets: `{"target": "drone1", "action": ...}` or `{"target": "swarm", "action": "WEDGE_FORMATION"}`.
+    *   Update prompt so LLM understands squad-level intent.
+3.  **Swarm Coordinator Node (`coordinator.py`)**
+    *   Receives Swarm-level validated JSON.
+    *   If command is independent (e.g., "Drone 1 go left, Drone 2 go right"), dispatch specific tasks to separate executor instances.
+    *   If command is a formation (e.g., "Form a wedge and go forward"):
+        *   Assign Drone 1 as Leader. Drone 1 executes standard path following.
+        *   Assign Drone 2 and 3 as Followers.
+        *   Calculate follower setpoints mathematically based on Leader's telemetry (e.g., Drone 2 must be Leader X - 5m, Leader Y - 5m).
+        *   Send continuous Offboard velocity/position commands to Followers to maintain the offset.
+
+---
+
+## Phase 6: Final Polish & Delivery
+1.  **Documentation (`README.md`)**
+    *   Add 1-step installation instructions (`docker compose up`).
+    *   Document dependencies and tested OS.
+    *   Write out example prompts that work well.
+2.  **Architecture Write-Up**
+    *   Document the strict decoupling of the LLM from the control loop (emphasize the Validator node).
+    *   Explain scaling: How to move from SITL to real hardware (e.g., swapping Gazebo for a real Pixhawk).
+3.  **Citations & Repo hygiene**
+    *   Create `CITATIONS.md` listing repos (e.g., PX4/PX4-Autopilot, YOLOv8).
+    *   Ensure `.gitignore` avoids pushing large models or videos.
+4.  **Demo Video Recording**
+    *   Record screen showing split view: Terminal (prompt input) + Gazebo (drone actions).
+    *   Narrate or use text overlays explaining the pipeline in real-time.
+
+---
+
+## Phase 7: Final Review Against Evaluation Principles
+Before submission, ensure the following criteria are met perfectly, as they are how the examiner will grade the project:
+1.  **Core Pipeline Baseline**: Does `Prompt -> Path` work flawlessly?
+2.  **Architecture Quality**: Is the LLM 100% out of the control loop? Are we validating JSON strictly? Is the MAVSDK executor fully deterministic?
+3.  **Reproducibility**: Can an examiner on a fresh Linux machine run `docker compose up` and have it just work?
+4.  **Scaling Story**: Is it documented how this swaps from SITL to real hardware (e.g., swapping the UDP connection for a serial radio link)?
+5.  **Ownership Check**: Are we prepared to explain every single line of code and architectural decision in a live interview?

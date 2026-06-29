@@ -63,7 +63,7 @@ class DeterministicExecutor:
         logger.info(f"Connecting to drone at {self.connection_string} ...")
         try:
             from mavsdk import System
-            self.drone = System(mavsdk_server_address=self.connection_string)
+            self.drone = System()
         except ImportError:
             logger.warning("MAVSDK not available — running in simulation mode")
             self.drone = None
@@ -74,22 +74,14 @@ class DeterministicExecutor:
 
     async def _do_connect(self, loop):
         try:
-            await asyncio.wait_for(self.drone.connect(), timeout=5.0)
+            await asyncio.wait_for(
+                self.drone.connect(system_address=self.connection_string), timeout=10.0
+            )
         except asyncio.TimeoutError:
             logger.warning("Drone connection timed out — running in simulation mode")
             self.drone = None
             return
-        logger.info("Connecting...")
-        try:
-            async for state in asyncio.wait_for(
-                self.drone.core.connection_state(), timeout=5.0
-            ):
-                if state.is_connected:
-                    logger.info("Drone connected")
-                    break
-        except asyncio.TimeoutError:
-            logger.warning("No connection state received — running in simulation mode")
-            self.drone = None
+        logger.info("Drone connected via MAVSDK")
 
     def arm(self):
         self.state = ExecutorState.ARMING

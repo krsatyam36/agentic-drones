@@ -1,4 +1,4 @@
-# Omokai Robotics — Full Project Context
+# Agentic Drones — Full Project Context
 # NOT committed to GitHub — local reference only.
 
 ---

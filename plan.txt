@@ -1,0 +1,53 @@
+# Project Plan: Agentic Drones Project
+
+## Goal
+Build a working pipeline in a simulated environment where natural language prompts are converted into actions for a drone or robot. We will aim for the **Complete Challenge** by implementing the core pipeline along with all three senior challenges (Multi-agent, SLAM/Nav, Vision AI).
+
+## Core Architecture
+`Prompt -> LLM -> Validated Mission JSON -> Deterministic Executor -> Simulator (PX4 SITL / Gazebo)`
+
+## Phase 1: Foundation & Docker Setup (Immediate Next Step)
+*   **Action**: Create a portable, reproducible environment using Docker from the very start.
+*   **Tech Stack**: Ubuntu 22.04 base, ROS 2 Humble, Gazebo Harmonic/Classic, PX4 Autopilot.
+*   **Components**: 
+    *   `Dockerfile` containing all dependencies (ROS 2, PX4, MAVROS/MAVSDK, Python dependencies like Pydantic, Ultralytics YOLO).
+    *   `docker-compose.yml` to orchestrate the simulation, ROS nodes, and GUI components (X11 forwarding for Gazebo/QGroundControl).
+*   **Outcome**: A single command (`docker compose up`) starts the simulation environment on any Linux machine.
+
+## Phase 2: Core Task Pipeline (LLM to Vehicle)
+*   **LLM Node**: A Python script taking user input (e.g., "Patrol in a 10m square"), querying an LLM (e.g., OpenAI or local Ollama), and outputting a structured JSON mission plan.
+*   **Validator Node**: Uses Pydantic or JSON Schema to validate the LLM's output (checking valid commands, altitude limits, safety boundaries).
+*   **Executor Node**: A deterministic Python script (using MAVSDK-Python or ROS 2 topics) that reads the validated JSON and sends specific flight commands (takeoff, go to waypoint, land) to the simulated drone.
+*   **Outcome**: The drone can follow basic paths based on natural language prompts.
+
+## Phase 3: Senior Challenges Implementation
+*   **Challenge 3: Vision AI (Target Detection + Follow)**
+    *   Add a simulated camera sensor to the drone in Gazebo.
+    *   Integrate YOLOv8 (via Ultralytics) into a ROS 2 node subscribing to the camera feed.
+    *   Implement a visual servoing or offboard control logic to adjust the drone's position to keep the target in the center of the frame.
+*   **Challenge 2: SLAM or Autonomous Navigation**
+    *   Integrate a LiDAR or depth camera.
+    *   Use RTAB-Map ROS or Nav2 to map the environment dynamically and route around obstacles instead of just blindly flying to waypoints.
+*   **Challenge 1: Multi-Agent Formations**
+    *   Spawn multiple drones (namespaces like `drone1`, `drone2`) in Gazebo.
+    *   Update the LLM schema to handle multi-agent tasks (e.g., "Drone 1 go left, Drone 2 go right").
+    *   Update the Executor to manage a swarm, ensuring collision avoidance and coordinated flight (leader-follower model).
+
+## Phase 4: Documentation and Final Delivery
+*   **Documentation**: Comprehensive `README.md` on how to install, run, and issue commands.
+*   **Architecture Write-up**: Clear documentation on how the pipeline fits together and scaling strategies.
+*   **Demo Video**: Record a video showing prompts going in and the drones/robots executing the tasks perfectly.
+*   **Attributions**: Strictly cite all open-source repos, code snippets, and models used.
+
+## Immediate Action Items
+1. Initialize a basic `Dockerfile` for ROS 2 Humble + PX4 SITL + Gazebo.
+2. Ensure X11 forwarding works in the container so we can see the simulation.
+3. Write a simple Python script in the container to make a drone take off (sanity check).
+
+## Evaluation Principles & Guidelines (To Keep in Mind)
+*   **The Baseline Bar**: The core pipeline must work end-to-end (prompt in -> agent follows path).
+*   **Architecture Quality**: The LLM must be strictly kept out of the control loop. JSON must be heavily validated. The executor must be deterministic and auditable.
+*   **Reproducibility**: The solution must run flawlessly on the examiner's Linux machine purely from our instructions (hence, Docker).
+*   **Depth**: Attempting and successfully integrating multiple challenges (Swarm, Nav, Vision) increases the project's value.
+*   **Scaling Story**: We must be able to clearly reason and explain in our documentation how to take this from a SITL demo to a real-world deployed system.
+*   **Ownership**: We must thoroughly understand all code written and be prepared to defend or modify it live.

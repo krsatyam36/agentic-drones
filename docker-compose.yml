@@ -1,10 +1,10 @@
 services:
-  omokai:
+  agentic-drones:
     build:
       context: .
       dockerfile: docker/Dockerfile
     image: agentic-drones:latest
-    container_name: omokai_drone
+    container_name: agentic_drones
     network_mode: host
     environment:
       - DISPLAY=${DISPLAY:-:0}

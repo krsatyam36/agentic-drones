@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3 -m pip install --upgrade pip && \
     pip install --no-cache-dir \
-        mavsdk==3.0.0 \
+        mavsdk>=3.15.0 \
         pydantic==2.10.0 \
         openai==1.55.0 \
         opencv-python-headless==4.10.0.84 \

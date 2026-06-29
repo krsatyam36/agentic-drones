@@ -1,5 +1,5 @@
 # =============================================================================
-# BUILD PHASES — Agentic Drones (Omokai Robotics Take-Home Task)
+# BUILD PHASES — Agentic Drones (Agentic Drones Project)
 # =============================================================================
 # Each phase ends with a hard gate/test. Status: DONE | PARTIAL | PENDING
 # =============================================================================

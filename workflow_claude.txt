@@ -1,0 +1,203 @@
+Agentic Drones Build Workflow — Stage-by-Stage to Top Tier
+
+A gated pipeline. Each stage builds one thing and ends with a hard exit test. Do not start a stage until the previous gate is green. Top tier isn't built by doing more — it's built by never advancing on a stage that secretly doesn't work.
+
+S0 ─▶ S1 ─▶ S2 ─▶ S3 ─▶ S4 ─▶ S5 ─▶ S6 ─▶ S7 ─▶ (S8) ─▶ S9 ─▶ S10 ─▶ S11
+decide  repro  contracts schema exec  path   LLM   deep   2nd   repro  deliver defend
+        skeleton          +valid (file) loop  wire challenge (opt)  harden
+└──────── core that wins on its own ────────┘└─ depth ─┘└─ proof & defense ─┘
+
+Legend for each stage: BUILD = what you produce · GATE = the test that must pass to advance · TIER = why it earns rubric points · DEFENSE = what they'll probe.
+
+
+STAGE 0 — Lock the decisions (½ day)
+
+BUILD: A one-page DECISIONS.md committing to: drone vs. ground robot; scope tier (solid / strong / direct-offer); the exact pinned stack (OS, ROS 2 distro, sim, flight stack, LLM); and which one challenge you build deep vs. write up.
+
+GATE: Every decision is written with a one-line reason. You could hand this page to a stranger and they'd know exactly what you're building and why.
+
+TIER: Prevents the #1 failure mode — drifting stacks and half-finished challenges. A coherent scope reads as senior judgment.
+
+DEFENSE: "Why drone not ground robot?" / "Why this challenge?" — the answer is already on the page.
+
+
+⛔ Do not write a single node until this is locked. Changing the stack at Stage 6 costs days.
+
+
+
+
+STAGE 1 — Reproducible skeleton (2 days) — highest-risk stage, front-loaded on purpose
+
+BUILD: Dockerfile + compose for the pinned stack. Sim + flight stack launching. A trivial manual takeoff to prove the vehicle responds.
+
+GATE (all four):
+
+git clone → docker compose up on a fresh Ubuntu 22.04 VM (not your dev box) brings the sim up.
+The drone arms and takes off from a one-off command.
+GUI is optional — headless still launches.
+The exact steps are written down as you do them, so the README writes itself later.
+
+TIER: "Runs on the examiner's Linux machine" is a stated condition, not a bonus. Most submissions die here. Passing this gate first means everything downstream sits on solid ground.
+
+DEFENSE: "Walk me through your environment." — you show the pinned versions and explain why each is pinned for reproducibility.
+
+
+⛔ If this gate isn't green, nothing downstream matters. Do not move on to "make it smart" until "it runs anywhere" is true.
+
+
+
+
+STAGE 2 — Define the contracts (½ day)
+
+BUILD: Write down the five-stage contracts before implementing nodes: topic names and message shapes for prompt → raw JSON → validated mission → telemetry → rejection. No logic yet — just the interfaces.
+
+GATE: You can publish a hand-crafted message on each topic and see it arrive on the next. Each boundary is independently observable (you can echo it).
+
+TIER: Clean contracts are what "auditable" and "decoupled" mean in practice. They make every later stage testable in isolation.
+
+DEFENSE: "How do the stages talk?" — you point at the message definitions, not hand-wave.
+
+
+STAGE 3 — Schema + validator, the guardrail (2 days) — your centerpiece
+
+BUILD: Pydantic mission schema (typed action whitelist, waypoints, mission metadata) + the three validation layers: (1) structural/parse, (2) semantic safety (altitude cap, speed cap, geofence, must-start-takeoff/end-land, sane jump distance), (3) re-prompt-on-failure stub.
+
+GATE (all three):
+
+A malformed JSON string is rejected at layer 1 with a clear reason.
+A well-formed but unsafe mission ("altitude 500 m", "waypoint outside fence") is rejected at layer 2, naming the violated rule.
+A valid mission passes and is published to /mission/validated.
+
+(Test all three with hand-written JSON. No LLM exists yet — that's correct.)
+
+TIER: The rubric explicitly weights "Is the JSON validated?" This is the most-graded component and the one most candidates fake. Build it first, build it strongest.
+
+DEFENSE: "What stops it doing something dangerous?" → name the exact layer-2 check and its threshold, and why you chose that number. Rehearse pointing at the function.
+
+
+STAGE 4 — Deterministic executor from a file (2 days) — the stage that wins the architecture points
+
+BUILD: Executor that consumes a validated mission file, walks the action list as a state machine (IDLE→ARM→TAKEOFF→EXECUTE→LAND→DONE, with a FAILSAFE branch), drives the vehicle, and logs every command with a timestamp. It imports nothing from the LLM layer.
+
+GATE (the two demos that separate you from everyone):
+
+Kill-the-LLM demo: with no LLM process running at all, executor --mission validated.json flies the mission. (Proves the LLM is out of the control loop.)
+Determinism demo: run the same file twice → diff the two command logs → identical. (Proves deterministic + auditable.)
+
+TIER: Directly answers the two highest-weighted rubric questions: "Is the LLM kept out of the loop?" and "Is the executor deterministic and auditable?" — by demonstration, not assertion.
+
+DEFENSE: "Prove the LLM isn't flying it." → you kill it and run from file. "Prove determinism." → you diff the logs. Build these as repeatable scripts; they're worth more than any feature.
+
+
+✅ At the end of Stage 4 you have a winning core and the LLM still doesn't exist. That ordering is the whole point — decoupling you were born with, not bolted on.
+
+
+
+
+STAGE 5 — The pre-determined path (1 day)
+
+BUILD: Encode a canonical perimeter-loop / inspection-route mission, parameterized by altitude and repeat count.
+
+GATE: The drone flies the loop end to end, returns, and lands. Changing the parameters (altitude, "twice") changes the flight correctly.
+
+TIER: Satisfies the task's explicit "must follow a pre-determined path or loop." This is the baseline bar — make it bulletproof before touching any challenge.
+
+DEFENSE: "Show me the path requirement." → run it.
+
+
+STAGE 6 — LLM node + wire end-to-end (2 days)
+
+BUILD: LLM node (local model default) with constrained JSON output, an engineered system prompt (action vocabulary + few-shot examples + limits + no-prose), and the live re-prompt-on-failure loop (finite retries, all logged).
+
+GATE (all three):
+
+"Patrol the perimeter loop twice at 15 m" → raw JSON → validated → drone flies it. Full pipeline, prompt to motion.
+An unsafe prompt is caught by the validator, not the drone.
+A deliberately malformed model output triggers the self-correction loop and recovers (or rejects cleanly after N tries).
+
+TIER: Completes the core pipeline the task draws (prompt → LLM → JSON → executor → sim) — the baseline bar, now smart. The self-correction loop shows the LLM as a fallible proposer wrapped by a deterministic cop: the exact architecture story graders want.
+
+DEFENSE: "What happens when the LLM is wrong?" → show layer 1 catching garbage, layer 2 catching unsafe, layer 3 self-correcting. The LLM never touches the vehicle.
+
+
+✅ End of Stage 6 = Solid tier locked. Core works end-to-end, decoupled, validated, deterministic, reproducible. Everything after this is depth and proof.
+
+
+
+
+STAGE 7 — The one deep challenge (4–5 days)
+
+BUILD (vision-follow path): camera in sim → YOLO detection node with configurable target class → on first detection, save image + notify operator → publish pixel error → executor TRACKING mode runs a capped PID converting error to body velocity, with a defined lost-target fallback (hover/search).
+(SLAM/Nav path: LiDAR → SLAM Toolbox online map → executor NAVIGATE_TO sends a Nav2 goal pose; drone/robot routes around an obstacle instead of flying straight.)
+
+GATE:
+
+The challenge demonstrably works (target followed / obstacle avoided).
+Velocities/goals are safety-capped (consistent with the guardrail philosophy).
+The challenge feeds the executor, not the LLM — architecture stays clean.
+You can derive the control law / explain the costmap on a whiteboard, and you've defined what happens on failure (lost target / blocked path).
+
+TIER: "Depth of challenges attempted and how well they work." One challenge done well and explainably outscores three done flakily.
+
+DEFENSE: "Derive your follow controller." / "What are your costmap layers?" / "What happens when it loses the target?" — all answerable because you built it, not pasted it.
+
+
+✅ End of Stage 7 = Strong tier.
+
+
+
+
+STAGE 8 — Second challenge, working partial (optional, 3–4 days) — only if Stage 7's gate is fully green
+
+BUILD: A working partial of a second challenge (e.g. spawn 2–3 namespaced drones + leader-follower offset formation for Ch. 1, or add detection to the SLAM robot). The task explicitly credits "a clear, working partial plus a sound explanation of how you'd complete it."
+
+GATE: The partial does something real and you can state precisely where it stops and how you'd finish — including the genuinely hard part (e.g. follower alignment under latency), named honestly.
+
+TIER: Pushes toward the Direct-Offer signal. Stop here if Stage 7 isn't airtight — breadth never rescues a shaky core.
+
+DEFENSE: "What's done vs. not?" → an honest boundary reads as senior; a hand-wave reads as bluffing.
+
+
+STAGE 9 — Reproducibility hardening (2 days) — the stage that protects everything above
+
+BUILD: A headless verify script (launch headless → feed a canned mission → assert on telemetry → print PASS/FAIL); opt-in GUI (X11) and opt-in GPU (YOLO falls back to CPU); zero required secrets (local model baked/pulled); pinned weights with checksum.
+
+GATE: On a fresh VM, twice, docker compose up ruore self-certifies even if their GUI/GPU differs from yours.
+
+DEFENSE: "It didn't render on my laptop." → "The verify script still prints PASS — here's the core proving itself headless."
+
+
+STAGE 10 — Deliverables (2 days)
+
+BUILD: README (one-command install, pinned versions, example prompts, how to run each demo); architecture write-up (five contracts + three validation layers + the decoupling claim); scaling story (SITL→hardware over the same MAVSDK interface, harden geofence/failsafe, fleet orchestration, what SITL hides); CITATIONS.md (repo, license, what you took, yours vs. borrowed); demo video hitting every rubric line.
+
+GATE: Each of the five evaluation principles maps to a concrete artifact (see scorecard below). The demo video shows the kill-LLM and same-JSON-twice moments explicitly.
+
+TIER: "Scaling story" and citations are graded directly; the write-up is where you make the architecture legible.
+
+DEFENSE: "How does this become real?" → the scaling section, with the through-line that the decoupling that makes the demo clean is what makes it safe in production.
+
+
+STAGE 11 — Defense rehearsal (1 day) — the actual final boss
+
+BUILD: Out-loud answers to the probe list, plus a rehearsed live edit (change the geofence / add a command / lower max altitude — know the file and what one change touches). Record yourself.
+
+GATE: You can run the full prompt-to-flight explanation, the two architecture demos, and one live code edit without notes. Where you stumble on the recording is your remaining study list.
+
+TIER: "You must be able to defend and modify your code live" is a hard requirement for full completion and the difference between a polished demo and disqualification.
+
+DEFENSE: This is the defense. If a stage's understanding is shaky, this is where it surfaces — fix the understanding, not just the slide.
+
+
+Top-Tier Scorecard — every rubric line mapped to its stages
+
+Evaluation principle (from the task)Satisfied byCore pipeline works end-to-end (baseline bar)S5 + S6LLM kept out of the control loopS4 (kill-LLM demo)JSON validatedS3 (three layers)Executor deterministic & auditableS4 (same-JSON-twice + audit log)Reproducible on examiner's machineS1 + S9 (fresh-VM, headless verify)Depth of challenges & how well they workS7 (deep) + S8 (partial)Scaling storyS10 (write-up)Defend & modify code liveS11 (rehearsed live edit)
+
+If every cell has a green gate behind it, you are at top tier — by evidence, not by hope.
+
+
+The three rules that keep this top-tier under time pressure
+
+Never advance on a red gate. A faked stage compounds into an undefendable submission.
+If Week-1 risk (S1) slips, cut a challenge (S8, then S7's depth) — never cut the core (S3–S6) or reproducibility (S9). A flawless narrow submission beats a broad flaky one, and protects you from the future-roles disqualification clause.
+The order is the argument. Building the deterministic executor (S4) before the LLM (S6) means decoupling is how the system was born — which is exactly why you'll defend it effortlessly in S11.

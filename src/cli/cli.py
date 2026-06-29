@@ -59,7 +59,7 @@ def main():
     backend = "ollama"
     model = None
 
-    print("Omokai Robotics — Agentic Drone Pipeline")
+    print("Agentic Drones — Agentic Drone Pipeline")
     print("Type 'exit' to quit\n")
 
     while True:

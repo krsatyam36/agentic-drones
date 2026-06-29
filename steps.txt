@@ -1,4 +1,4 @@
-Project: Agentic Drones (Omokai Robotics Take-Home Task)
+Project: Agentic Drones (Agentic Drones Project)
 Pipeline: Prompt → LLM → Validated JSON → Deterministic Executor → Simulator
 
 ────────────────────────────────────────────────────────────────────────────

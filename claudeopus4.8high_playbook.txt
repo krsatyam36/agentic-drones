@@ -1,0 +1,274 @@
+# Agentic Drones — Engineering Project
+
+*A thinking guide, not a copy-paste kit. Built in the order you should actually work, so that by the time you finish, you can defend any line of it cold.*
+
+---
+
+## 0. The one rule that shapes everything
+
+The grading is not "did an AI build this." It's "can **you** sit in a room, have them point at a node, and modify it live — and have you not be disqualified from future roles if you can't." Two consequences:
+
+1. **Every component below is described as a design + a set of decisions + the failure modes + what they'll ask.** Where I describe data shapes or logic, that is the *design* you implement yourself. If you find yourself unable to explain *why* a piece is the way it is, that piece is not done — go back.
+2. **Build narrow and deep.** The task explicitly says a clean partial solution plus a sound explanation of the rest counts. A flaky three-challenge submission you can't defend is worse than a rock-solid core + one excellent challenge + two thoughtful write-ups. Only chase the full full completion if you would genuinely back yourself live on all three.
+
+---
+
+## 1. Strategy & the first real decision
+
+### Scope tiers (pick honestly)
+- **Solid submission:** Core pipeline, excellent. One challenge, working. Two challenges, written up well.
+- **Strong submission:** Core + two working challenges + one written up.
+- **Complete attempt:** Core + all three working, reproducible on their box, defensible live, in 3 weeks.
+
+### Drone vs. ground robot — decide this before anything else
+This single fork determines your whole stack. The task says pick what you can demo *most convincingly*, not what's most impressive.
+
+| If your target challenge is… | Pick | Why |
+|---|---|---|
+| SLAM / autonomous navigation (Ch. 2) | **Ground robot** (TurtleBot3 + Nav2 + SLAM Toolbox) | Nav2 is mature and *designed* for 2D ground robots. Bolting Nav2 onto a 3D drone is genuinely painful — the Gemini plan even concedes you'd have to "constrain to a fixed altitude and treat it as 2D," which is a tell it's fighting the tooling. |
+| Multi-agent formation (Ch. 1) or Vision-follow (Ch. 3) | **Drone** (PX4 SITL + Gazebo) | The "wow" of formation flight and aerial target-follow is much stronger on a drone, and PX4's offboard velocity control + multi-vehicle SITL are well-trodden. |
+
+**My recommendation if you want one challenge done beautifully:** ground robot + Nav2/SLAM. It's the most likely to *actually work on the examiner's machine*, and "navigates an unknown map and routes around obstacles" demos cleanly. **If you want the strongest signal and can absorb the pain:** drone + vision-follow as your deep challenge, because the closest-matching open repo (monemati/PX4-ROS2-Gazebo-YOLOv8) already does drone + ROS 2 + Gazebo + YOLO with a moving target — meaning your time goes into *understanding and adapting*, not fighting integration from zero.
+
+The rest of this playbook assumes **drone (PX4)** as the primary, with explicit notes for the ground-robot path, because drone is what both your prior plans assumed and it keeps all three challenges on the table.
+
+---
+
+## 2. The stack (pinned — this is where most submissions die)
+
+The task warns you directly about version fragmentation. That warning is the single biggest practical landmine. Pin this exact combination and do not drift toward "newer":
+
+| Layer | Pin | Why this and not the newest |
+|---|---|---|
+| OS | **Ubuntu 22.04** | The combo below is built and documented against it. |
+| ROS 2 | **Humble** (LTS until May 2027) | Most tutorials, and crucially the task's own repo list skews Humble (ChatDrones, the PX4 template, PX4_Swarm_Controller are all Humble). Jazzy (Ubuntu 24.04, LTS to 2029) is the forward-looking choice but the example ecosystem hasn't fully followed. **Do not use Kilted (non-LTS, EOL Nov 2026) or Lyrical Luth (May 2026, ecosystem not caught up).** |
+| Simulator | **Gazebo Harmonic** | Gazebo Classic is deprecated/EOL. PX4's `ubuntu.sh` installs Harmonic on 22.04, and the ROS↔Gazebo bridge ships as `ros-humble-ros-gzharmonic`. |
+| Flight stack | **PX4 v1.15.x** (pin a specific tag, e.g. check out the latest v1.15 patch) | `px4_msgs` is released against 1.15; example repos test against it. Pinning a tag (not `main`) is what makes your build reproducible next month. |
+| Drone↔ROS link | **MAVSDK-Python** for the executor; optionally the **uXRCE-DDS** bridge (`px4_msgs`) if you want native ROS 2 topics | MAVSDK gives you a clean async API for arm/takeoff/goto/land and offboard velocity — ideal for a deterministic executor. |
+| LLM | **Ollama (local) as default**, OpenAI as optional | Local model = the examiner needs no API key, the demo runs offline, and it reinforces your "the LLM isn't secretly required at runtime" story. |
+| Validation | **Pydantic v2** | Schema + custom validators in one place. |
+| Vision | **Ultralytics YOLO** | Pretrained COCO weights cover person/car/etc. out of the box; configurable target type is just a class filter. |
+
+**Ground-robot path swaps:** TurtleBot3 (`turtlebot3_simulations`) + Nav2 + SLAM Toolbox, all native ROS 2 Humble — no PX4/MAVSDK at all. Simpler stack, fewer moving parts.
+
+> **Action before you trust any of this:** when you actually start, re-verify the exact PX4 tag ↔ Gazebo Harmonic ↔ `ros-gzharmonic` compatibility against current PX4 docs, because these matrices shift. Pin what *builds clean today on a fresh machine*, then never touch it.
+
+---
+
+## 3. Architecture — the five stages as contracts
+
+The rubric is explicitly about **decoupling**: "Is the LLM kept out of the control loop? Is the JSON validated? Is the executor deterministic and auditable?" So design the system as five stages joined by **strict contracts**, where each stage can be run and tested in isolation. The contract *is* the architecture.
+
+```
+ Operator CLI ──prompt(str)──▶ LLM node ──raw JSON(str)──▶ Validator ──MissionPlan──▶ Executor ──MAVSDK/Nav2──▶ Sim
+      ▲                                                         │                          │
+      └──────────── error / rejection (str) ◀───────────────────┘                          │
+                                                          telemetry ◀──────────────────────┘
+```
+
+The single most important architectural property, and the one you should make the *headline* of your write-up and demo:
+
+> **The executor consumes a validated mission *file*. It never imports, calls, or depends on the LLM. You can delete the LLM node entirely and the executor still flies any valid mission JSON.**
+
+That one sentence answers "is the LLM out of the loop?" and "is it deterministic and auditable?" better than any paragraph. Build the system so it's literally true.
+
+### The contracts (define these first, before any node)
+- **CLI → LLM:** a plain string. ROS topic `/operator/prompt` (or a function call).
+- **LLM → Validator:** a raw JSON string on `/llm/raw_mission`. The LLM's *only* job is to emit text that hopefully parses into your schema. It is allowed to be wrong; that's what the next stage is for.
+- **Validator → Executor:** a *validated* `MissionPlan` object, serialized, on `/mission/validated`. Nothing reaches the executor unless it passed every check.
+- **Validator → Operator:** a human-readable rejection on `/mission/rejected` (and optionally fed back to the LLM for self-correction — see §4).
+- **Executor → Operator:** telemetry (position, mode, battery, mission progress) on `/drone/status`.
+
+Because these are clean topic/message boundaries, you get four things the rubric rewards: testability (feed canned JSON straight to the executor), auditability (log every message at every boundary), determinism (same JSON → same flight), and a trivially honest "LLM is out of the loop" claim.
+
+---
+
+## 4. The schema & validator — the intellectual core (build this *first*)
+
+This is the part graders care about most and the part most developers treat as a checkbox. Make it your strongest component. **Write the schema and validator before you write the LLM node**, because the schema is the spec the LLM must satisfy and the contract the executor relies on.
+
+### Schema design (Pydantic v2)
+Model a mission as a typed list of actions. Conceptually:
+
+- `Waypoint`: `x, y, z` (or `lat, lon, alt`) — choose local NED or global and **be able to explain why** (local is simpler to reason about and to geofence; global matches MAVSDK `goto_location`).
+- `Action`: a discriminated union over a **command whitelist** — e.g. `TAKEOFF(alt)`, `GOTO(waypoint, speed)`, `LOITER(seconds)`, `RETURN_TO_LAUNCH`, `LAND`. Unknown command type → rejected at parse time.
+- `MissionPlan`: `list[Action]` plus mission-level metadata (e.g. target agent for multi-drone).
+
+### Layered validation — three distinct layers, and you must articulate them
+1. **Structural (schema):** does it parse into the model at all? Right fields, right types, known command names. Pydantic does this for free.
+2. **Semantic / safety (your custom validators):** the guardrail layer the task names explicitly. Examples you should implement and be able to justify:
+   - altitude within `[min, max]` (e.g. ≤ 50 m);
+   - speed within allowed envelope (e.g. ≤ 15 m/s);
+   - every waypoint inside a defined **geofence** polygon;
+   - a mission must start with `TAKEOFF` and end with `LAND` or `RETURN_TO_LAUNCH` (no "fly off and never come down");
+   - waypoint-to-waypoint jump distance sane (no teleport across the map);
+   - total leg count / mission duration bounded.
+3. **Re-prompt-on-failure (the impressive bit):** if validation fails, return the structured error *to the LLM* with the original prompt and ask it to fix its output, up to N attempts. After N failures, reject to the operator. This shows the LLM as a *fallible proposer* wrapped by a *deterministic cop* — exactly the architecture story they want. Keep N small and log every attempt.
+
+**What they'll ask here:** "What stops the LLM from flying the drone into a wall / above legal altitude / out of bounds?" Your answer is layer 2, with the specific check named. "What if the LLM returns garbage?" → layer 1 rejects it before it's an object; layer 3 optionally self-corrects. Rehearse pointing at the exact validator function.
+
+---
+
+## 5. Core pipeline — node by node (design + defense)
+
+For each node: what it does, the real decisions, the failure modes, and the defense.
+
+### 5.1 Operator CLI (`cli`)
+- **Does:** reads a line from the terminal, publishes the string. That's it. Keep it dumb.
+- **Decision:** make it a thin ROS 2 publisher (or a stdin loop that calls the LLM client) so the prompt path is observable on a topic. Observability = auditability.
+- **Defense:** trivial, but be ready to explain *why it's separate* — separation of concerns; the operator interface should never know how missions are planned or flown.
+
+### 5.2 LLM node (`llm_node`)
+- **Does:** takes the prompt, prepends a system prompt that describes the schema, calls the model (Ollama default), and emits a raw JSON string.
+- **Decisions you must own:**
+  - **Force structured output.** Use the model's JSON/structured mode (or function-calling-style constrained output) so you get JSON, not prose. With Ollama, request JSON format and provide the schema in the system prompt. Be able to explain *why constrained decoding matters*: it cuts the failure rate that layer-3 self-correction has to absorb.
+  - **The system prompt is engineering, not a wish.** It should: state the exact action vocabulary, give 2–3 worked examples (few-shot), state the limits (s temperature reduces churn).
+- **Failure modes:** hallucinated commands (caught by layer 1), unsafe-but-valid missions (caught by layer 2), non-JSON (caught by layer 1 / retried by layer 3).
+- **Defense:** "The LLM only *proposes*. It is never trusted. Show me a prompt that breaks it" → and you show the validator catching it. That's a winning moment; engineer for it.
+
+### 5.3 Validator node (`validator_node`)
+- Covered in §4. Implementation note: subscribe to `/llm/raw_mission`, attempt `MissionPlan.model_validate_json(...)`, run semantic checks, publish to `/mission/validated` or `/mission/rejected`.
+- **Defense:** this is your centerpiece. Know every check and why its threshold is what it is. "Why 50 m?" → you decided it; have a reason (regulatory/typical-sim/geofence). A specific, owned answer beats a vague one every time.
+
+### 5.4 Deterministic executor (`executor_node`)
+- **Does:** subscribes to `/mission/validated`, connects to the vehicle via MAVSDK, walks the action list as a **state machine**, publishes telemetry. **Imports nothing from the LLM layer.**
+- **State machine (describe in words, implement yourself):** `IDLE → ARMING → TAKEOFF → EXECUTING(action_i) → … → LANDING → DONE`, with a `FAILSAFE` branch on any MAVSDK error (e.g. command rejected, connection lost → trigger RTL/land). Per action: `TAKEOFF` → arm + takeoff to alt; `GOTO` → `goto_location` (or offboard setpoint); `LOITER` → hold; `LAND`/`RTL` → land/return.
+- **The determinism property — make it demonstrable:**
+  - The executor accepts a `--mission path/to/validated.json` argument so it can run with **the LLM process not even started**.
+  - Same JSON in → same flight out. No randomness in the executor. No clock-dependent branching that changes the path.
+  - Log every command issued with a timestamp → that log *is* your audit trail.
+- **Defense:** "Prove the LLM isn't in the control loop." → you run the executor from a file with the LLM killed, and show the audit log. "Prove it's deterministic." → run the same file twice, diff the command logs. Build these two demos deliberately; they are worth more than any feature.
+
+### 5.5 The pre-determined path requirement
+The task wants the agent to follow a pre-determined path/loop. Encode a canonical "perimeter loop" or "inspection route" as a known mission, and make sure prompts like "patrol the perimeter twice at 15 m" map to it (with the "twice" and "15 m" parameterizing repetition and altitude). This is your baseline-bar demo — get it bulletproof before touching any challenge.
+
+---
+
+## 6. The challenge you build *deep* (pick one)
+
+### Recommended deep build: Challenge 3 — Vision target detection + follow (drone)
+Closest open-source match (monemati/PX4-ROS2-Gazebo-YOLOv8) means your effort goes into understanding, not plumbing. Two deliverables the task names: (a) send a picture to the operator on detection, (b) auto-follow; target type configurable.
+
+- **Camera:** add an RGB camera plugin to the Gazebo drone SDF (forward or downward facing); bridge the image stream to a ROS 2 topic via `ros_gz_image`/`ros-gzharmonic`.
+- **Detection node (`vision_node`):** subscribe to the image topic (`cv_bridge`), run YOLO inference, filter to the **user-configurable target class** (a parameter — "person", "car", etc. — this directly satisfies "configurable by the user"). On first detection: save the frame (`imwrite`) and emit a "target acquired, image at X" event to the operator. Publish the **pixel error** (bounding-box center minus frame center) and box area on `/vision/target_error`.
+- **Follow (visual servoing):** add a `TRACKING` mode to the executor. Switch PX4 to **offboard**, subscribe to the error, run a **simple PID** mapping pixel error → body velocity: horizontal error → yaw/lateral velocity; box-area-too-small (target far) → forward velocity. Cap velocities (a safety guardrail, consistent with §4). 
+- **Why this is defensible:** the control law is small and you can derive it on a whiteboard. Know the PID terms, why you cap output, what happens when the target is lost (define a search/hover fallback — graders love that you thought about it), and the latency budget (inference time vs. control rate).
+- **Keep the architecture clean:** vision feeds the *executor*, not the LLM. The LLM's role is only to put the system *into* tracking mode for a target type ("follow any person you see") → which is just another validated mission action. The LLM stays out of the loop; the follow controller is deterministic.
+
+### Alternative deep build: Challenge 2 — SLAM/Nav (ground robot)
+- TurtleBot3 in Gazebo, LiDAR publishing `/scan`, SLAM Toolbox building `/map` online, Nav2 planning around obstacles.
+- Executor change: a `NAVIGATE_TO` action sends a **goal pose to the Nav2 action server** instead of a straight-line `goto`. Nav2 computes the obstacle-free path. This is the cleanest "navigates an unknown environment rather than following fixed waypoints" story and the most reproducible.
+- Defense: know the costmap layers, the planner vs. controller split, and what `use_sim_time` is doing (a classic interview gotcha — sim clock vs. wall clock).
+
+---
+
+## 7. The two challenges you *write up* (still must be defensible)
+
+The task gives explicit credit for "a sound explanation of how you'd complete it." These write-ups should read like you've designed them, because you have — keep them concrete.
+
+### If you built vision (Ch. 3), write up Ch. 1 and Ch. 2:
+
+**Challenge 1 — Multi-agent formation (write-up):**
+- Spawn N drones with unique MAVLink UDP ports (14540, 14541, 14542) and ROS namespaces (`/drone1/…`).
+- Extend the schema: actions carry a `target` field (`drone1` | `swarm`), and add formation actions (`WEDGE`, `LINE`). The LLM emits *squad-level intent*; the validator checks it; a **coordinator** translates it.
+- Coordinator design: for independent tasks, dispatch per-drone missions to per-drone executors. For formations, designate a **leader** (follows the path) and compute **follower setpoints as fixed offsets from leader telemetry** (e.g. follower = leader position + body-frame offset), streamed as offboard setpoints to maintain geometry. Add inter-agent spacing as a safety check.
+- Be honest about the hard part: it's the **coordination/timing layer** keeping followers aligned under latency, not the LLM intent. Reference PX4_Swarm_Controller (leader-follower on PX4+Humble) as the base you'd adapt.
+
+**Challenge 2 — SLAM/Nav (write-up):** describe the §6-alternative design (sensor → SLAM Toolbox → Nav2 goal poses, executor sends goals not straight lines), and note the drone-specific wrinkle (3D Nav2 is hard; you'd constrain to fixed-altitude 2D or use a ground robot for this).
+
+### If you built SLAM (Ch. 2, ground robot), write up Ch. 1 and Ch. 3 analogously, with Ch. 3 framed as adding a camera + YOLO node feeding a follow controller.
+
+---
+
+## 8. Reproducibility — where submissions actually die
+
+Docker is necessary but the GUI+GPU+X11 path is exactly what breaks on someone else's box. Engineer around that:
+
+1. **Pin every version** (§2). Check out tags, not branches. Pin Python deps with exact versions. Pin the YOLO weights file (commit it or script its download with a checksum).
+2. **Build a headless verification path.** A `verify` script that: launches SITL headless, feeds a canned validated mission to the executor, and **asserts on telemetry** (e.g. "reached waypoint within tolerance, landed"). This proves the core works *even if the examiner's GUI/GPU differs from yours*. This is the single highest-leverage reproducibility move — the demo can fail to render and the core still self-certifies.
+3. **GUI is opt-in, not required.** `docker compose up` runs headless + verify by default; a separate flag/compose-profile brings up Gazebo GUI via X11. Document the X11 incantation (`xhost +local:docker`, mounting `/tmp/.X11-unix`, `DISPLAY`) but don't make the pass/fail depend on it.
+4. **GPU is opt-in.** YOLO should fall back to CPU (slower, still works) if no NVIDIA runtime. Don't let "no GPU on examiner's laptop" zero your vision demo.
+5. **No required secrets.** Ollama local model, baked into the image or pulled by the entrypoint. The examiner supplies nothing.
+6. **Test on a fresh VM, not your dev box.** Your machine is contaminated with things you installed and forgot. Spin up a clean Ubuntu 22.04 VM, run only your documented steps, and watch it fail — then fix the docs. Do this twice. This is the difference between "runs on the examiner's machine" (a stated condition) and "runs on mine."
+
+---
+
+## 9. The demo (script it to hit the rubric, not to look pretty)
+
+Record a screen capture, split view: terminal (prompt) + Gazebo. Hit each rubric point on purpose:
+
+1. **Core, end-to-end:** type "patrol the perimeter loop twice at 15 metres" → show the raw JSON → show the validator accepting → show the drone flying the loop. (Baseline bar.)
+2. **Validator earns its keep:** type something unsafe ("patrol at 500 metres") → show the validator **rejecting** it with a clear reason. Then show the self-correction loop fixing a malformed output. (Architecture quality.)
+3. **LLM out of the loop:** **kill the LLM process**, run the executor from a saved `validated.json` → drone still flies. (Decoupling.)
+4. **Determinism:** run the same JSON twice → diff the command logs → identical. (Auditable + deterministic.)
+5. **Your deep challenge:** vision detect + follow, or SLAM/Nav around an obstacle. Show the saved detection image / the live map.
+6. **Reproduculity teaser:** show `docker compose up` running the headless verify and printing PASS.
+
+Narrate the pipeline as it runs. Points 3 and 4 are the ones that separate a solid implementation from a basic LLM-to-drone wire-up.
+
+---
+
+## 10. The written deliverables
+
+- **README:** one-command install (`docker compose up`), tested OS, the exact pinned versions, example prompts that work, and how to run each demo from §9.
+- **Architecture write-up:** lead with the decoupling story (§3). Diagram the five stages and their contracts. Explain the three validation layers (§4). State plainly: *the LLM proposes, the validator polices, the executor is deterministic and never imports the LLM.*
+- **Scaling story (they grade this explicitly):** how you'd go from SITL to real hardware — swap Gazebo for a real Pixhawk over the same MAVSDK/MAVLink interface (the executor doesn't change, which is the *point* of the decoupling); harden the geofence/failsafe layer; move the LLM off the critical path entirely (plan offline, execute online); add fleet orchestration and a real ground-control link; address the things SITL hides (wind, GPS dropout, comms latency, battery). Make the through-line: *the architecture that keeps the LLM out of the loop in the demo is the same architecture that makes it safe in the real world.*
+- **CITATIONS.md:** every repo you built on — URL, license, and exactly what you took. The task demands this and it's cheap signal. Be scrupulous: list PX4-Autopilot, the PX4-ROS2-Gazebo template, monemati/PX4-ROS2-Gazebo-YOLOv8 (or whichever you adapt), Ultralytics, Nav2/SLAM Toolbox if used, PX4_Swarm_Controller if referenced, and their licenses. State what's yours vs. borrowed honestly — graders respect a clear line far more than a suspiciously-clean "all original."
+
+---
+
+## 11. Interview defense — the questions, and how to actually be ready
+
+There's no script that substitutes for having built it. But here are the questions to expect, so you build with the answers in mind:
+
+- *"Walk me through what happens between me typing a prompt and the drone moving."* → the five contracts, in order. If you can't do this fluently, nothing else matters.
+- *"Where exactly is the LLM in the control loop?"* → it isn't; demonstrate by killing it (§9.3).
+- *"What stops it flying somewhere dangerous?"* → name the specific layer-2 validator and its threshold, and why you chose that threshold.
+- *"Change the geofence / add a new command / lower the max altitude — right now."* → you'll edit the Pydantic model or a validator. **Rehearse this exact edit.** Know where the file is and what one change touches.
+- *"Why Humble and not the newest ROS?"* → reproducibility and example-ecosystem maturity; you pinned for the examiner's machine, not for novelty.
+- *"Your PID/follow controller — derive it."* → if you built vision, know it on a whiteboard, including the target-lost fallback.
+- *"How does this scale to 50 drones / real hardware?"* → §10 scaling story.
+- *"What's the weakest part of your submission?"* → have an honest answer ready. "The follower formation under latency is the part I'd most want to harden, here's how" beats pretending it's all solid. Honesty about limits reads as senior.
+
+If any answer above makes you uneasy, that component isn't finished — finish your *understanding* of it, not just the code.
+
+---
+
+## 12. Three-week schedule (realistic, front-loads risk)
+
+**Week 1 — De-risk the boring killers.**
+- Days 1–2: Dockerized stack building clean on a **fresh VM**. Gazebo + PX4 SITL + a manual takeoff sanity check. (If this isn't solid, nothing downstream matters — do not move on until it is.)
+- Days 3–4: Schema +meter-loop mission flying end-to-end; the determinism + audit-log demo working. **At this point the core is done and the LLM isn't even written** — that's the right order.
+
+**Week 2 — LLM layer + your one deep challenge.**
+- Days 8–9: LLM node (Ollama, structured output, system prompt, self-correction loop). Now prompt → flight works end to end.
+- Days 10–14: Your chosen challenge (vision-follow or SLAM/Nav), built to actually work and be explainable.
+
+**Week 3 — Harden, document, defend.**
+- Days 15–17: Headless verify path; opt-in GUI/GPU; fresh-VM reproducibility test (twice); fix the docs each time it breaks.
+- Days 18–19: README, architecture write-up, scaling story, CITATIONS.
+- Days 20–21: Record the demo (§9). Then **rehearse the defense out loud**, including the live-edit (§11). Record yourself answering; if you stumble, that's your study list.
+
+> If Week 1 slips, **cut a challenge, not the core or the reproducibility.** A flawless core + one challenge + clean repro + a confident defense beats a broad, flaky, undefendable submission — and protects you from the "disqualified from future roles" clause.
+
+---
+
+## 13. Citations starter (fill license + "what I took")
+
+- PX4/PX4-Autopilot — *flight stack + SITL* — BSD-3-Clause
+- The PX4-ROS2-Gazebo drone template you base on — *project skeleton* — (check repo license)
+- mavlink/MAVSDK-Python — *executor's vehicle API* — (check license)
+- ultralytics/ultralytics (YOLO) — *detection* — AGPL-3.0 (note: AGPL has obligations — be aware for the "real system" story)
+- monemati/PX4-ROS2-Gazebo-YOLOv8 — *vision integration reference* — (check license)
+- ros-navigation/navigation2 + SteveMacenski/slam_toolbox — *if ground-robot path* — (check licenses)
+- artastier/PX4_Swarm_Controller — *if you reference formation control* — (check license)
+- Your own prior work — list it explicitly; it's expected and valued.
+
+*(Verify each license yourself before submitting — don't trust this list's guesses. The AGPL note on YOLO is worth understanding, because they may ask about it.)*
+
+---
+
+### The through-line, one more time
+The pipeline they drew — prompt → LLM → JSON → validator → executor → sim — is really just a frame for one idea: **a fallible proposer, wrapped by a deterministic guardrail, driving an auditable executor.** Build that idea well, prove it with the kill-the-LLM and same-JSON-twice demos, and be able to change it live. Everything else is detail.
+
+Good luck. Go build the thing you can defend.

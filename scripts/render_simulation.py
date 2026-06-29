@@ -258,7 +258,7 @@ def main():
 
             # corner timestamp
             elapsed = fi / FPS
-            ax.text2D(0.98, 0.02, f"OMOKAI ROBOTICS    {int(elapsed//60):02d}:{int(elapsed%60):02d}",
+            ax.text2D(0.98, 0.02, f"AGENTIC DRONES    {int(elapsed//60):02d}:{int(elapsed%60):02d}",
                       transform=ax.transAxes, color="#404060", fontsize=8,
                       ha="right", va="bottom", fontfamily="monospace")
 

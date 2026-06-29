@@ -1,0 +1,56 @@
+# Tech Stack Selection & Justification
+
+This document details the technologies chosen for the Agentic Drones pipeline and the reasoning behind each choice. This serves as a blueprint for the architecture's scalability and robustness.
+
+## 1. Simulation Environment: Gazebo (Harmonic) + PX4 SITL
+**What did we choose?**
+*   **Gazebo Harmonic**: The standard, modernized 3D physics simulator for robotics.
+*   **PX4 SITL (Software In The Loop)**: The industry-standard open-source flight control software running against a simulated vehicle.
+
+**Why did we choose it?**
+*   **Realism and Portability**: PX4 SITL ensures that the exact same flight code running in simulation can be deployed directly to real hardware (e.g., a Pixhawk flight controller) with zero modifications.
+*   **Robustness**: Gazebo Harmonic handles complex physics, sensor simulations (LiDAR, Camera), and multi-agent rendering efficiently.
+*   **Integration**: It has native, out-of-the-box support for ROS 2.
+
+## 2. Middleware & Communication: ROS 2 (Humble)
+**What did we choose?**
+*   **ROS 2 Humble Hawksbill**: The Long Term Support (LTS) version of the Robot Operating System.
+
+**Why did we choose it?**
+*   **Decoupling & Modularity**: ROS 2’s pub/sub architecture natively enforces separation of concerns. The LLM Node, Validator Node, and Executor Node can all run independently. If the LLM node crashes, the Executor continues running safely, preserving the control loop's integrity.
+*   **Scalability**: Built on DDS (Data Distribution Service), it scales seamlessly to multi-agent swarm setups (Challenge 1) by utilizing namespaces and QoS profiles.
+*   **Ecosystem**: Allows instant integration with Nav2 (for SLAM) and cv_bridge (for Vision AI).
+
+## 3. The LLM Node & AI: Python + OpenAI API (or Ollama for local)
+**What did we choose?**
+*   **Python 3.10**: For rapid development and ML ecosystem compatibility.
+*   **OpenAI API (GPT-4o/gpt-4o-mini)**: For interpreting natural language and generating structured output.
+*   **Pydantic**: For strict data validation.
+
+**Why did we choose it?**
+*   **Deterministic Guardrails**: The primary requirement is keeping the LLM *out* of the direct control loop. By using OpenAI's structured output capabilities (or function calling) combined with Pydantic, we mathematically guarantee that the resulting JSON mission plan conforms to our strict safety schema (altitude limits, valid waypoints) before it ever reaches the drone.
+*   **Flexibility**: This node is a completely stateless translator. It can be easily swapped for a local VLM/LLM (like Llama 3 via Ollama) if the system needs to run offline in a real-world scenario.
+
+## 4. The Executor: MAVSDK-Python
+**What did we choose?**
+*   **MAVSDK-Python**: A high-level MAVLink library for communicating with PX4.
+
+**Why did we choose it?**
+*   **Safety and Auditability**: It provides a deterministic, synchronous (or async) way to send commands (Takeoff, Goto, Land) to the drone. Every command sent is logged, and the drone's behavior is 100% predictable given a valid JSON input.
+*   **Abstraction**: It abstracts away the raw MAVLink byte-parsing, allowing us to focus on mission logic and swarm coordination.
+
+## 5. Vision AI (Challenge 3): Ultralytics YOLOv8
+**What did we choose?**
+*   **Ultralytics YOLOv8 (Nano or Small)**: State-of-the-art, real-time object detection model.
+
+**Why did we choose it?**
+*   **Performance**: The nano/small models run at high FPS even on edge devices (like a Jetson Nano on a real drone).
+*   **Ease of Integration**: Ultralytics provides a clean Python API that integrates flawlessly with OpenCV and ROS 2 `cv_bridge`. It outputs bounding boxes directly, which we map to visual servoing error for the tracking algorithm.
+
+## 6. Containerization: Docker & Docker Compose
+**What did we choose?**
+*   **Docker** with NVIDIA Container Toolkit (for GPU passthrough).
+
+**Why did we choose it?**
+*   **Strict Reproducibility**: The prompt mandates that the code must run effortlessly on the examiner's Linux machine. A `Dockerfile` guarantees exact dependency versions (ROS 2, PX4, Python libraries), eliminating the "it works on my machine" problem.
+*   **Isolation**: Keeps the host machine clean and allows us to rapidly spin up/tear down the entire multi-agent swarm ecosystem with a single `docker compose up` command.

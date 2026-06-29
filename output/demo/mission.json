@@ -1,0 +1,131 @@
+{
+  "mission_id": "patrol_001",
+  "target": "drone1",
+  "actions": [
+    {
+      "type": "TAKEOFF",
+      "waypoint": null,
+      "altitude": 15.0,
+      "speed": 5.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 50.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 100.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 150.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 200.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 250.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 300.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 50.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "GOTO",
+      "waypoint": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -15.0
+      },
+      "altitude": null,
+      "speed": 10.0,
+      "loiter_seconds": null,
+      "repeat_count": null
+    },
+    {
+      "type": "LAND",
+      "waypoint": null,
+      "altitude": null,
+      "speed": null,
+      "loiter_seconds": null,
+      "repeat_count": null
+    }
+  ],
+  "geofence": null
+}

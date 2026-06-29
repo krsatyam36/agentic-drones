@@ -7,7 +7,7 @@ mkdir -p "$DEMO_DIR"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     Agentic Drones — Omokai Robotics Demo                   ║"
+echo "║     Agentic Drones Demo                                      ║"
 echo "║     Prompt → LLM → Validated JSON → Executor → Simulator    ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
@@ -37,13 +37,13 @@ sleep 1
 
 echo ">>> Enter command: Patrol the perimeter loop twice at 15 metres"
 echo ""
-python3 -c "
+LLM_BACKEND=ollama LLM_MODEL=llama3.2 timeout 120 python3 -c "
 from src.llm.llm_node import LLMNode
 from src.validator.validator import validate_mission
 import json
 
 prompt = 'Patrol the perimeter loop twice at 15 metres'
-node = LLMNode(backend='ollama', model='llama3.2')
+node = LLMNode()
 raw = node.generate(prompt)
 print('[LLM RAW] Mission JSON generated')
 print(raw[:200] + '...')
@@ -63,7 +63,12 @@ if result.valid:
     print(f'  Actions: {len(mission[\"actions\"])} waypoints')
 else:
     print(f'[VALIDATOR] ❌ FAIL: {result.errors}')
-"
+" 2>&1 || echo '[SKIP] LLM not available — using pre-built mission instead'
+# Fallback: copy test mission if LLM fails
+if [ ! -f output/demo/mission.json ]; then
+    cp /workspace/test/mission.json /workspace/output/demo/mission.json
+    echo '[FALLBACK] Copied test mission'
+fi
 echo ""
 sleep 3
 
@@ -77,7 +82,7 @@ sleep 1
 
 echo "Running executor with perimeter_loop.json (no LLM needed)..."
 echo ""
-python3 -m src.executor.executor --mission config/perimeter_loop.json --log output/demo/executor_audit.json
+python3 -m src.executor.executor --mission config/perimeter_loop.json --connection "udp://:14540" --log output/demo/executor_audit.json
 echo ""
 echo "Audit log preview:"
 python3 -c "

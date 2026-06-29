@@ -2,7 +2,7 @@
 set -e
 
 echo "================================================"
-echo "  Omokai Robotics — Headless Verification Script"
+echo "  Agentic Drones — Headless Verification Script"
 echo "================================================"
 echo ""
 

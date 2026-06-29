@@ -2,7 +2,7 @@
 set -e
 
 echo "================================================"
-echo "  Omokai Robotics — Host Setup Script"
+echo "  Agentic Drones — Host Setup Script"
 echo "  Ubuntu 22.04 / 24.04"
 echo "================================================"
 

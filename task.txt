@@ -1,0 +1,90 @@
+Agentic Drones — Project Scope & Requirements
+================================================
+
+A personal project to build an end-to-end autonomous drone pipeline controlled
+via natural language prompts. The pipeline:
+
+    Prompt → LLM → validated mission JSON → deterministic executor → simulator
+
+1. Core Pipeline
+Build a working pipeline in a simulated environment where you give a command
+using a prompt, AI understands the intent and converts it into action for a
+drone or robot. The vehicle must follow a pre-determined path or loop.
+
+What each stage means:
+  Prompt — A natural-language instruction from the operator, e.g. "Patrol the
+           perimeter loop twice at 15 metres," or "Drive the inspection route
+           and return to start."
+  LLM — Interprets the intent and emits a structured plan. The LLM should
+        propose, not fly.
+  Validated mission JSON — The plan is expressed as structured JSON and checked
+        against a schema and basic safety/sanity rules (valid waypoints, allowed
+        altitude/speed, known commands) before anything executes. This is the
+        guardrail layer.
+  Deterministic executor — Reads the validated JSON and issues concrete commands
+        to the vehicle. This layer is deterministic and auditable: the same JSON
+        always produces the same behaviour. The LLM is never directly in the
+        control loop.
+  Simulator / autopilot — PX4 SITL, with jMAVSim or Gazebo for 3D visualization.
+
+2. Senior Challenges (implement at least one)
+Solve at least one of the challenges below, with an overview of the approach
+for the rest. A clean working partial solution plus a sound explanation of how
+to complete it counts.
+
+  Multi-agent formations. Control 2–3 drones autonomously in a formation,
+  and command them to perform tasks (e.g. "You three sweep this area in a
+  wedge," split a route between them, regroup). Requires the LLM to issue
+  squad-level intent and a coordination/formation layer to keep the agents
+  aligned.
+
+  SLAM or autonomous navigation. Integrate SLAM (online mapping + localization)
+  or full autonomous navigation, so the agent can navigate an unknown or
+  partially known environment rather than just following fixed waypoints.
+
+  Vision AI target detection + follow. Give the agent a vision capability so
+  that, when it sees a user-defined target, it (a) sends a picture to the human
+  operator, and (b) automatically follows the target. The target type should be
+  configurable by the user.
+
+3. Design Constraints
+- Portability: The code must run on a Linux environment via Docker.
+- Reproducibility: Provide a Dockerfile or setup script with exact dependency
+  versions.
+- Documentation: Clean demo docs covering install, run, commands, and expected
+  output.
+- Every open-source dependency cited with repo URL, license, and what was taken.
+
+4. Deliverables
+- Repository with code, Dockerfile/setup, and documentation.
+- Demo video recording showing the prompt going in and the agent executing.
+- Architecture write-up: how prompt → LLM → JSON → executor → sim fits together.
+- Which challenges were attempted and how they were solved.
+- Scaling story: how to take this from demo to real-world deployment.
+- List of cited sources (repos, licenses, past work).
+
+5. Reference Repositories & Tools
+
+Simulation & autopilot base:
+  PX4 Autopilot + SITL — github.com/PX4/PX4-Autopilot
+  MAVSDK-Python — github.com/mavlink/MAVSDK-Python
+  PX4-ROS2-Gazebo Template — github.com/SathanBERNARD/PX4-ROS2-Gazebo-Drone-Simulation-Template
+
+Prompt / LLM → drone control:
+  ChatDrones — github.com/Gaurang-1402/ChatDrones
+  LLM-controlled-drone — github.com/pratikPhadte/LLM-controlled-drone
+  ros2-agent-ws — github.com/limshoonkit/ros2-agent-ws
+
+SLAM / Navigation (Challenge 2):
+  ROS 2 Navigation2 — github.com/ros-navigation/navigation2
+  SLAM Toolbox — github.com/SteveMacenski/slam_toolbox
+  TurtleBot3 — github.com/ROBOTIS-GIT/turtlebot3_simulations
+
+Multi-agent / Swarm (Challenge 1):
+  PX4_Swarm_Controller — github.com/artastier/PX4_Swarm_Controller
+  gym-pybullet-drones — github.com/utiasDSL/gym-pybullet-drones
+  mavsdk_drone_show — github.com/alireza787b/mavsdk_drone_show
+
+Vision AI (Challenge 3):
+  Ultralytics YOLO — github.com/ultralytics/ultralytics
+  PX4-ROS2-Gazebo-YOLOv8 — github.com/monemati/PX4-ROS2-Gazebo-YOLOv8
